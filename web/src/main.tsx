@@ -1,4 +1,4 @@
-import React, { FormEvent, useEffect, useMemo, useState } from 'react';
+import React, { FormEvent, KeyboardEvent, useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Activity,
@@ -55,6 +55,10 @@ function App() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    await submitMessage();
+  }
+
+  async function submitMessage() {
     if (!message.trim() || !selectedModel || isSending) {
       return;
     }
@@ -76,6 +80,13 @@ function App() {
       setError(sendError instanceof Error ? sendError.message : 'Message failed.');
     } finally {
       setIsSending(false);
+    }
+  }
+
+  function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      void submitMessage();
     }
   }
 
@@ -151,6 +162,7 @@ function App() {
             <textarea
               value={message}
               onChange={(event) => setMessage(event.target.value)}
+              onKeyDown={handleComposerKeyDown}
               placeholder="Ask Peppa something..."
               rows={4}
             />
