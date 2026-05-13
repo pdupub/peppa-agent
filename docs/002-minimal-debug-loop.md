@@ -95,10 +95,12 @@ var/
 
 ```bash
 peppa models
-peppa init-db
+peppa reset-agent
 peppa chat "请用一句话确认 Peppa 是否可用。"
 peppa serve
 ```
+
+`peppa serve` 和 `peppa chat` 会在需要时自动创建数据库和表结构。`peppa reset-agent` 用于重置 Peppa 的长期状态：如果数据库不存在，会直接创建；如果数据库已存在，会先在命令行要求确认。
 
 启动服务后访问：
 

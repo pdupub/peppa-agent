@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import shutil
-from pathlib import Path
 
 import typer
 import uvicorn
@@ -35,11 +34,33 @@ def init_config(force: bool = typer.Option(False, help="Overwrite existing confi
 
 
 @app.command()
-def init_db() -> None:
-    """Initialize the local SQLite database."""
+def reset_agent() -> None:
+    """Reset Peppa's long-term local state."""
+    if not DATABASE_PATH.exists():
+        ensure_runtime_dirs()
+        Storage().initialize()
+        typer.echo(f"Created database: {DATABASE_PATH}")
+        return
+
+    confirmed = typer.confirm(
+        f"This will delete Peppa's conversations, traces, and future memories at "
+        f"{DATABASE_PATH}. Continue?"
+    )
+    if not confirmed:
+        typer.echo("Reset cancelled. Existing agent state was kept.")
+        return
+
+    for path in (
+        DATABASE_PATH,
+        DATABASE_PATH.with_name(f"{DATABASE_PATH.name}-wal"),
+        DATABASE_PATH.with_name(f"{DATABASE_PATH.name}-shm"),
+    ):
+        if path.exists():
+            path.unlink()
+
     ensure_runtime_dirs()
     Storage().initialize()
-    typer.echo(f"Initialized database: {DATABASE_PATH}")
+    typer.echo(f"Reset agent state and initialized database: {DATABASE_PATH}")
 
 
 @app.command()

@@ -33,4 +33,10 @@ peppa serve
 ```
 
 Then open `http://127.0.0.1:8000`.
+
+Reset local agent state when needed:
+
+```bash
+peppa reset-agent
+```
 AI Agent from Matrix
