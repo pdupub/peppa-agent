@@ -1,0 +1,12 @@
+[app]
+default_model = "example-model"
+
+[[models]]
+model = "example-model"
+base_url = "https://api.example.com/v1"
+api_key = "replace-me"
+
+[[models]]
+model = "another-example-model"
+base_url = "https://api.example.org/v1"
+api_key = "replace-me"

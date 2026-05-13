@@ -1,0 +1,21 @@
+.DS_Store
+
+# Local configuration and runtime data
+config.toml
+state/
+var/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Frontend
+web/node_modules/
+web/dist/
+
+# Logs
+*.log
