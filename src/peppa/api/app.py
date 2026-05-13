@@ -20,6 +20,7 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1)
     model: str | None = None
     conversation_id: str | None = None
+    temperature: float = Field(default=1.0, ge=0.0, le=2.0)
 
 
 class ChatResponse(BaseModel):
@@ -66,6 +67,7 @@ def create_app() -> FastAPI:
                 user_message=request.message,
                 requested_model=request.model,
                 conversation_id=request.conversation_id,
+                temperature=request.temperature,
             )
         except ConfigError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc

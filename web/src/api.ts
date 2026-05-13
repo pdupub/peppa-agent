@@ -28,6 +28,7 @@ export function fetchTraces(): Promise<{ traces: TraceRecord[] }> {
 export function sendChat(params: {
   message: string;
   model: string;
+  temperature: number;
   conversationId?: string;
 }): Promise<ChatResponse> {
   return requestJson<ChatResponse>('/api/chat', {
@@ -35,6 +36,7 @@ export function sendChat(params: {
     body: JSON.stringify({
       message: params.message,
       model: params.model,
+      temperature: params.temperature,
       conversation_id: params.conversationId
     })
   });

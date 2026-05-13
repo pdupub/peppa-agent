@@ -43,6 +43,7 @@ class Agent:
         user_message: str,
         requested_model: str | None = None,
         conversation_id: str | None = None,
+        temperature: float = 1.0,
     ) -> ChatResult:
         clean_message = user_message.strip()
         if not clean_message:
@@ -67,6 +68,7 @@ class Agent:
         request_payload = self.model_client.build_request_payload(
             model=model_settings.model,
             messages=prompt_messages,
+            temperature=temperature,
         )
         response_payload: dict[str, Any] | None = None
         assistant_message: str | None = None
@@ -77,6 +79,7 @@ class Agent:
             response = await self.model_client.chat(
                 model_settings=model_settings,
                 messages=prompt_messages,
+                temperature=temperature,
             )
             request_payload = response.request_payload
             response_payload = response.response_payload

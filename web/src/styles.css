@@ -21,6 +21,7 @@ body {
 
 button,
 select,
+input,
 textarea {
   font: inherit;
 }
@@ -49,6 +50,7 @@ button {
 .brand-block,
 .topbar-controls,
 .model-picker,
+.temperature-control,
 .status-pill,
 .panel-header,
 .json-title,
@@ -103,6 +105,7 @@ h2 {
 }
 
 .model-picker,
+.temperature-control,
 .status-pill,
 .icon-button,
 .send-button {
@@ -116,6 +119,24 @@ h2 {
 .model-picker {
   gap: 8px;
   padding: 0 10px;
+}
+
+.temperature-control {
+  gap: 8px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.temperature-control span {
+  color: #8c95a5;
+}
+
+.temperature-control input {
+  width: 64px;
+  border: 0;
+  outline: 0;
+  color: #eff3f8;
+  background: transparent;
 }
 
 .model-picker select {
@@ -401,7 +422,8 @@ pre {
   }
 
   .topbar-controls,
-  .model-picker {
+  .model-picker,
+  .temperature-control {
     width: 100%;
   }
 

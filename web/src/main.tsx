@@ -16,9 +16,17 @@ import { fetchConfig, fetchTraces, sendChat } from './api';
 import type { PublicConfig, TraceRecord } from './types';
 import './styles.css';
 
+const DEFAULT_TEMPERATURE = 1;
+const MIN_TEMPERATURE = 0;
+const MAX_TEMPERATURE = 2;
+const TEMPERATURE_STORAGE_KEY = 'peppa.temperatureByModel.v1';
+
 function App() {
   const [config, setConfig] = useState<PublicConfig | null>(null);
   const [selectedModel, setSelectedModel] = useState('');
+  const [temperatureByModel, setTemperatureByModel] = useState<Record<string, number>>(
+    loadStoredTemperatures
+  );
   const [message, setMessage] = useState('');
   const [conversationId, setConversationId] = useState<string | undefined>();
   const [activeTrace, setActiveTrace] = useState<TraceRecord | null>(null);
@@ -69,6 +77,7 @@ function App() {
       const result = await sendChat({
         message,
         model: selectedModel,
+        temperature: selectedTemperature,
         conversationId
       });
       setConversationId(result.conversation_id);
@@ -90,10 +99,27 @@ function App() {
     }
   }
 
+  function handleTemperatureChange(nextValue: number) {
+    if (!selectedModel) {
+      return;
+    }
+
+    const nextTemperature = clampTemperature(nextValue);
+    setTemperatureByModel((current) => {
+      const next = {
+        ...current,
+        [selectedModel]: nextTemperature
+      };
+      saveStoredTemperatures(next);
+      return next;
+    });
+  }
+
   const activeModel = useMemo(
     () => config?.models.find((model) => model.model === selectedModel),
     [config, selectedModel]
   );
+  const selectedTemperature = temperatureByModel[selectedModel] ?? DEFAULT_TEMPERATURE;
 
   return (
     <main className="app-shell">
@@ -123,6 +149,19 @@ function App() {
                 </option>
               ))}
             </select>
+          </label>
+          <label className="temperature-control">
+            <span>Temperature</span>
+            <input
+              type="number"
+              min={MIN_TEMPERATURE}
+              max={MAX_TEMPERATURE}
+              step="0.1"
+              value={selectedTemperature}
+              onChange={(event) => handleTemperatureChange(event.currentTarget.valueAsNumber)}
+              disabled={!selectedModel}
+              aria-label="Temperature"
+            />
           </label>
           <StatusPill icon={<Activity size={14} />} label="Runtime" value="Running" />
           <StatusPill icon={<Database size={14} />} label="SQLite" value="state" />
@@ -267,6 +306,37 @@ function JsonPanel({
       <pre>{JSON.stringify(value, null, 2)}</pre>
     </section>
   );
+}
+
+function loadStoredTemperatures(): Record<string, number> {
+  const rawValue = window.localStorage.getItem(TEMPERATURE_STORAGE_KEY);
+  if (!rawValue) {
+    return {};
+  }
+
+  try {
+    const parsedValue = JSON.parse(rawValue) as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(parsedValue)
+        .filter(([, value]) => typeof value === 'number' && Number.isFinite(value))
+        .map(([model, value]) => [model, clampTemperature(value as number)])
+    );
+  } catch {
+    return {};
+  }
+}
+
+function saveStoredTemperatures(temperatures: Record<string, number>) {
+  window.localStorage.setItem(TEMPERATURE_STORAGE_KEY, JSON.stringify(temperatures));
+}
+
+function clampTemperature(value: number): number {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_TEMPERATURE;
+  }
+
+  const roundedValue = Math.round(value * 10) / 10;
+  return Math.min(MAX_TEMPERATURE, Math.max(MIN_TEMPERATURE, roundedValue));
 }
 
 createRoot(document.getElementById('root')!).render(
