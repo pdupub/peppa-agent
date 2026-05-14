@@ -41,3 +41,18 @@ export function sendChat(params: {
     })
   });
 }
+
+export function testMemoryToolCall(params: {
+  traceIds: string[];
+  model: string;
+  temperature: number;
+}): Promise<{ trace: TraceRecord }> {
+  return requestJson<{ trace: TraceRecord }>('/api/memory/tool-call-test', {
+    method: 'POST',
+    body: JSON.stringify({
+      trace_ids: params.traceIds,
+      model: params.model,
+      temperature: params.temperature
+    })
+  });
+}

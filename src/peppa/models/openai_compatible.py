@@ -26,12 +26,16 @@ class ModelClient:
         self,
         *,
         model_settings: ModelSettings,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
         temperature: float = 1.0,
     ) -> ModelResponse:
         request_payload = self.build_request_payload(
             model=model_settings.model,
             messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
             temperature=temperature,
         )
         headers = {
@@ -67,15 +71,22 @@ class ModelClient:
         self,
         *,
         model: str,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
         temperature: float = 1.0,
     ) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "temperature": temperature,
             "stream": False,
         }
+        if tools:
+            payload["tools"] = tools
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+        return payload
 
 
 def _extract_message_content(payload: dict[str, Any]) -> str:

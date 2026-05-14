@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -12,7 +13,8 @@ from pydantic import BaseModel, Field
 from peppa import __version__
 from peppa.config import ConfigError, load_settings
 from peppa.core import Agent
-from peppa.memory import Storage
+from peppa.memory import Storage, memory_graph_update_tools, memory_tool_choice
+from peppa.models import ModelClient
 from peppa.paths import DATABASE_PATH, ROOT_DIR, WEB_DIST_DIR, ensure_runtime_dirs
 
 
@@ -25,6 +27,16 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     conversation_id: str
+    trace: dict[str, Any]
+
+
+class MemoryToolTestRequest(BaseModel):
+    trace_ids: list[str] = Field(min_length=1, max_length=20)
+    model: str | None = None
+    temperature: float = Field(default=1.0, ge=0.0, le=2.0)
+
+
+class MemoryToolTestResponse(BaseModel):
     trace: dict[str, Any]
 
 
@@ -89,8 +101,141 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Trace not found.")
         return record.public_dict()
 
+    @app.post("/api/memory/tool-call-test", response_model=MemoryToolTestResponse)
+    async def memory_tool_call_test(request: MemoryToolTestRequest) -> MemoryToolTestResponse:
+        try:
+            settings = load_settings()
+            model_settings = settings.get_model(request.model)
+        except ConfigError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        selected_traces = []
+        for trace_id in request.trace_ids:
+            record = storage.get_trace(trace_id)
+            if record is None:
+                raise HTTPException(status_code=404, detail=f"Trace not found: {trace_id}")
+            if _is_tool_call_trace(record.public_dict()):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Tool-call traces cannot be used as memory test input: {trace_id}",
+                )
+            selected_traces.append(record)
+
+        selected_traces.sort(key=lambda item: item.created_at)
+        prompt_messages = _build_memory_tool_test_messages(
+            [trace.public_dict() for trace in selected_traces]
+        )
+        tools = memory_graph_update_tools()
+        tool_choice = memory_tool_choice()
+        model_client = ModelClient()
+        request_payload = model_client.build_request_payload(
+            model=model_settings.model,
+            messages=prompt_messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            temperature=request.temperature,
+        )
+        request_payload["_peppa"] = {
+            "kind": "memory_tool_test",
+            "source_trace_ids": request.trace_ids,
+            "source_trace_order": [trace.id for trace in selected_traces],
+        }
+
+        response_payload: dict[str, Any] | None = None
+        assistant_message: str | None = None
+        error: str | None = None
+        started_at = perf_counter()
+        try:
+            response = await model_client.chat(
+                model_settings=model_settings,
+                messages=prompt_messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                temperature=request.temperature,
+            )
+            response_payload = response.response_payload
+            assistant_message = response.content
+        except Exception as exc:
+            error = str(exc)
+
+        conversation_id = storage.create_conversation("Memory tool-call test")
+        duration_ms = int((perf_counter() - started_at) * 1000)
+        trace = storage.create_trace(
+            conversation_id=conversation_id,
+            model=model_settings.model,
+            user_message=f"Memory tool-call test from {len(selected_traces)} trace(s)",
+            assistant_message=assistant_message,
+            prompt_messages=prompt_messages,
+            memory_hits=[],
+            request_payload=request_payload,
+            response_payload=response_payload,
+            duration_ms=duration_ms,
+            error=error,
+        )
+
+        return MemoryToolTestResponse(trace=trace.public_dict())
+
     mount_web_app(app, WEB_DIST_DIR)
     return app
+
+
+def _build_memory_tool_test_messages(source_traces: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    context_blocks = []
+    for index, trace in enumerate(source_traces, start=1):
+        assistant_text = trace.get("assistant_message") or trace.get("error") or ""
+        context_blocks.append(
+            "\n".join(
+                [
+                    f"## Turn {index}",
+                    f"trace_id: {trace.get('id')}",
+                    f"model: {trace.get('model')}",
+                    f"user: {trace.get('user_message')}",
+                    f"assistant: {assistant_text}",
+                ]
+            )
+        )
+
+    return [
+        {
+            "role": "system",
+            "content": (
+                "你是 Peppa 的记忆提取测试器。"
+                "请基于用户提供的多轮对话内容，调用 record_memory_graph_update 工具，"
+                "提取适合长期记忆候选的 tags、nodes、edges。"
+                "本次测试的目标就是验证 tool call 参数质量，因此如果 provider 支持工具调用，"
+                "请优先使用 tool call 返回结果。"
+                "tags 既要包含原文中的关键表达，也要包含合理的上位概念或联想概念。"
+                "nodes 应记录人、项目、偏好、事件、概念、决策、规则或产物。"
+                "edges 只记录有明确依据或高度可信的关系。"
+                "source_quote 必须来自输入内容，不要编造。"
+                "如果某类内容不存在，返回空数组。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": "以下是按时间顺序排列的对话内容：\n\n" + "\n\n".join(context_blocks),
+        },
+    ]
+
+
+def _is_tool_call_trace(trace: dict[str, Any]) -> bool:
+    request_meta = trace.get("request_payload", {}).get("_peppa")
+    if isinstance(request_meta, dict) and request_meta.get("kind") == "memory_tool_test":
+        return True
+
+    response_payload = trace.get("response_payload")
+    if not isinstance(response_payload, dict):
+        return False
+    choices = response_payload.get("choices")
+    if not isinstance(choices, list):
+        return False
+    return any(
+        isinstance(choice, dict)
+        and isinstance(choice.get("message"), dict)
+        and isinstance(choice["message"].get("tool_calls"), list)
+        and len(choice["message"]["tool_calls"]) > 0
+        for choice in choices
+    )
 
 
 def mount_web_app(app: FastAPI, dist_dir: Path) -> None:

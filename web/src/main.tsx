@@ -6,13 +6,14 @@ import {
   Bot,
   Braces,
   Database,
+  Maximize2,
   MessageSquare,
   RefreshCw,
   Send,
   Settings2,
   Sparkles
 } from 'lucide-react';
-import { fetchConfig, fetchTraces, sendChat } from './api';
+import { fetchConfig, fetchTraces, sendChat, testMemoryToolCall } from './api';
 import type { PublicConfig, TraceRecord } from './types';
 import './styles.css';
 
@@ -31,7 +32,13 @@ function App() {
   const [conversationId, setConversationId] = useState<string | undefined>();
   const [activeTrace, setActiveTrace] = useState<TraceRecord | null>(null);
   const [traces, setTraces] = useState<TraceRecord[]>([]);
+  const [selectedTraceIds, setSelectedTraceIds] = useState<Set<string>>(() => new Set());
   const [isSending, setIsSending] = useState(false);
+  const [isTestingMemory, setIsTestingMemory] = useState(false);
+  const [expandedJsonPanel, setExpandedJsonPanel] = useState<{
+    title: string;
+    value: unknown;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -43,7 +50,7 @@ function App() {
       const [nextConfig, nextTraces] = await Promise.all([fetchConfig(), fetchTraces()]);
       setConfig(nextConfig);
       setSelectedModel(nextConfig.default_model);
-      setTraces(nextTraces.traces);
+      applyTraces(nextTraces.traces);
       setActiveTrace(nextTraces.traces[0] ?? null);
       setError(null);
     } catch (loadError) {
@@ -54,7 +61,7 @@ function App() {
   async function refreshTraces() {
     try {
       const nextTraces = await fetchTraces();
-      setTraces(nextTraces.traces);
+      applyTraces(nextTraces.traces);
       setError(null);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Failed to refresh traces.');
@@ -84,7 +91,7 @@ function App() {
       setActiveTrace(result.trace);
       setMessage('');
       const nextTraces = await fetchTraces();
-      setTraces(nextTraces.traces);
+      applyTraces(nextTraces.traces);
     } catch (sendError) {
       setError(sendError instanceof Error ? sendError.message : 'Message failed.');
     } finally {
@@ -115,11 +122,66 @@ function App() {
     });
   }
 
+  function applyTraces(nextTraces: TraceRecord[]) {
+    setTraces(nextTraces);
+    setSelectedTraceIds((current) => {
+      const selectableTraceIds = new Set(
+        nextTraces.filter((trace) => !isToolCallTrace(trace)).map((trace) => trace.id)
+      );
+      return new Set([...current].filter((traceId) => selectableTraceIds.has(traceId)));
+    });
+  }
+
+  function handleTraceSelection(trace: TraceRecord, checked: boolean) {
+    if (isToolCallTrace(trace)) {
+      return;
+    }
+
+    setSelectedTraceIds((current) => {
+      const next = new Set(current);
+      if (checked) {
+        next.add(trace.id);
+      } else {
+        next.delete(trace.id);
+      }
+      return next;
+    });
+  }
+
+  async function handleMemoryToolTest() {
+    const selectedTraces = traces
+      .filter((trace) => selectedTraceIds.has(trace.id) && !isToolCallTrace(trace))
+      .sort((left, right) => left.created_at.localeCompare(right.created_at));
+
+    if (selectedTraces.length === 0 || !selectedModel || isTestingMemory) {
+      return;
+    }
+
+    setIsTestingMemory(true);
+    setError(null);
+    try {
+      const result = await testMemoryToolCall({
+        traceIds: selectedTraces.map((trace) => trace.id),
+        model: selectedModel,
+        temperature: selectedTemperature
+      });
+      setActiveTrace(result.trace);
+      setSelectedTraceIds(new Set());
+      const nextTraces = await fetchTraces();
+      applyTraces(nextTraces.traces);
+    } catch (testError) {
+      setError(testError instanceof Error ? testError.message : 'Memory tool test failed.');
+    } finally {
+      setIsTestingMemory(false);
+    }
+  }
+
   const activeModel = useMemo(
     () => config?.models.find((model) => model.model === selectedModel),
     [config, selectedModel]
   );
   const selectedTemperature = temperatureByModel[selectedModel] ?? DEFAULT_TEMPERATURE;
+  const selectedTraceCount = selectedTraceIds.size;
 
   return (
     <main className="app-shell">
@@ -218,37 +280,87 @@ function App() {
               <h2>Recent Traces</h2>
               <p>{traces.length} loaded</p>
             </div>
-            <button className="icon-button" type="button" onClick={() => void refreshTraces()}>
-              <RefreshCw size={16} />
-              <span>Refresh</span>
-            </button>
+            <div className="trace-actions">
+              <button
+                className="icon-button"
+                type="button"
+                onClick={() => void handleMemoryToolTest()}
+                disabled={selectedTraceCount === 0 || isTestingMemory}
+              >
+                {isTestingMemory ? <RefreshCw className="spin" size={16} /> : <Database size={16} />}
+                <span>{isTestingMemory ? 'Testing' : `Memory ${selectedTraceCount}`}</span>
+              </button>
+              <button className="icon-button" type="button" onClick={() => void refreshTraces()}>
+                <RefreshCw size={16} />
+                <span>Refresh</span>
+              </button>
+            </div>
           </div>
           <div className="trace-list">
-            {traces.map((trace) => (
-              <button
-                className={trace.id === activeTrace?.id ? 'trace-row active' : 'trace-row'}
-                key={trace.id}
-                type="button"
-                onClick={() => setActiveTrace(trace)}
-              >
-                <span className="trace-model">{trace.model}</span>
-                <span className="trace-message">{trace.user_message}</span>
-                <span className={trace.error ? 'trace-state error' : 'trace-state'}>
-                  {trace.error ? 'error' : `${trace.duration_ms ?? 0} ms`}
-                </span>
-              </button>
-            ))}
+            {traces.map((trace) => {
+              const isDisabled = isToolCallTrace(trace);
+              return (
+                <div className={isDisabled ? 'trace-item disabled' : 'trace-item'} key={trace.id}>
+                  <input
+                    type="checkbox"
+                    checked={selectedTraceIds.has(trace.id)}
+                    disabled={isDisabled}
+                    aria-label={`Select trace ${trace.id}`}
+                    onChange={(event) => handleTraceSelection(trace, event.currentTarget.checked)}
+                  />
+                  <button
+                    className={trace.id === activeTrace?.id ? 'trace-row active' : 'trace-row'}
+                    type="button"
+                    onClick={() => setActiveTrace(trace)}
+                  >
+                    <span className="trace-model">{trace.model}</span>
+                    <span className="trace-message">{trace.user_message}</span>
+                    <span className={trace.error ? 'trace-state error' : 'trace-state'}>
+                      {trace.error ? 'error' : `${trace.duration_ms ?? 0} ms`}
+                    </span>
+                  </button>
+                </div>
+              );
+            })}
             {traces.length === 0 && <div className="empty-state">No traces yet.</div>}
           </div>
         </aside>
       </section>
 
       <section className="debug-grid">
-        <JsonPanel title="Prompt" icon={<Bot size={16} />} value={activeTrace?.prompt_messages ?? []} />
-        <JsonPanel title="Memory Hits" icon={<Database size={16} />} value={activeTrace?.memory_hits ?? []} />
-        <JsonPanel title="Request" icon={<Braces size={16} />} value={activeTrace?.request_payload ?? {}} />
-        <JsonPanel title="Response" icon={<Braces size={16} />} value={activeTrace?.response_payload ?? {}} />
+        <JsonPanel
+          title="Prompt"
+          icon={<Bot size={16} />}
+          value={activeTrace?.prompt_messages ?? []}
+          onExpand={setExpandedJsonPanel}
+        />
+        <JsonPanel
+          title="Memory Hits"
+          icon={<Database size={16} />}
+          value={activeTrace?.memory_hits ?? []}
+          onExpand={setExpandedJsonPanel}
+        />
+        <JsonPanel
+          title="Request"
+          icon={<Braces size={16} />}
+          value={activeTrace?.request_payload ?? {}}
+          onExpand={setExpandedJsonPanel}
+        />
+        <JsonPanel
+          title="Response"
+          icon={<Braces size={16} />}
+          value={activeTrace?.response_payload ?? {}}
+          onExpand={setExpandedJsonPanel}
+        />
       </section>
+
+      {expandedJsonPanel && (
+        <JsonModal
+          title={expandedJsonPanel.title}
+          value={expandedJsonPanel.value}
+          onClose={() => setExpandedJsonPanel(null)}
+        />
+      )}
     </main>
   );
 }
@@ -291,20 +403,62 @@ function MessageBubble({
 function JsonPanel({
   title,
   icon,
-  value
+  value,
+  onExpand
 }: {
   title: string;
   icon: React.ReactNode;
   value: unknown;
+  onExpand: (panel: { title: string; value: unknown }) => void;
 }) {
   return (
     <section className="panel json-panel">
       <div className="json-title">
-        {icon}
-        <h2>{title}</h2>
+        <div className="json-heading">
+          {icon}
+          <h2>{title}</h2>
+        </div>
+        <button
+          className="json-expand-button"
+          type="button"
+          aria-label={`Expand ${title}`}
+          onClick={() => onExpand({ title, value })}
+        >
+          <Maximize2 size={15} />
+        </button>
       </div>
       <pre>{JSON.stringify(value, null, 2)}</pre>
     </section>
+  );
+}
+
+function JsonModal({
+  title,
+  value,
+  onClose
+}: {
+  title: string;
+  value: unknown;
+  onClose: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        className="json-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="json-modal-header">
+          <h2>{title}</h2>
+          <button className="icon-button" type="button" onClick={onClose}>
+            Close
+          </button>
+        </div>
+        <pre>{JSON.stringify(value, null, 2)}</pre>
+      </section>
+    </div>
   );
 }
 
@@ -337,6 +491,29 @@ function clampTemperature(value: number): number {
 
   const roundedValue = Math.round(value * 10) / 10;
   return Math.min(MAX_TEMPERATURE, Math.max(MIN_TEMPERATURE, roundedValue));
+}
+
+function isToolCallTrace(trace: TraceRecord): boolean {
+  const requestMeta = getRecord(trace.request_payload._peppa);
+  if (requestMeta?.kind === 'memory_tool_test') {
+    return true;
+  }
+
+  const choices = trace.response_payload?.choices;
+  if (!Array.isArray(choices)) {
+    return false;
+  }
+
+  return choices.some((choice) => {
+    const choiceRecord = getRecord(choice);
+    const message = getRecord(choiceRecord?.message);
+    const toolCalls = message?.tool_calls;
+    return Array.isArray(toolCalls) && toolCalls.length > 0;
+  });
+}
+
+function getRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null;
 }
 
 createRoot(document.getElementById('root')!).render(

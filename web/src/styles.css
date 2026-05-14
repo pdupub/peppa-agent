@@ -172,7 +172,7 @@ h2 {
 
 .console-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
+  grid-template-columns: minmax(0, 1fr) 460px;
   gap: 16px;
   min-height: 460px;
 }
@@ -217,16 +217,17 @@ h2 {
   background: #18202a;
 }
 
+.icon-button:disabled,
+.send-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
 .send-button {
   min-width: 108px;
   border-color: #2f5b56;
   background: #17322f;
   color: #c9fff3;
-}
-
-.send-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.58;
 }
 
 .conversation-window {
@@ -306,6 +307,31 @@ h2 {
   padding: 12px;
 }
 
+.trace-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.trace-item {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.trace-item input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #8ed7c6;
+}
+
+.trace-item.disabled {
+  opacity: 0.68;
+}
+
 .trace-row {
   display: grid;
   gap: 6px;
@@ -363,14 +389,39 @@ h2 {
 }
 
 .json-title {
+  justify-content: space-between;
   gap: 8px;
   padding: 12px;
   border-bottom: 1px solid #252b36;
   color: #dbe1ea;
 }
 
-.json-title svg {
+.json-heading {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+
+.json-title svg,
+.json-heading svg {
   color: #8ed7c6;
+}
+
+.json-expand-button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid #2b3340;
+  border-radius: 8px;
+  background: #10141b;
+  color: #dbe1ea;
+}
+
+.json-expand-button:hover {
+  border-color: #3a4a5e;
+  background: #18202a;
 }
 
 pre {
@@ -383,6 +434,43 @@ pre {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 22px;
+  background: rgb(4 6 10 / 78%);
+}
+
+.json-modal {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(1180px, 96vw);
+  height: min(860px, 92vh);
+  overflow: hidden;
+  border: 1px solid #334054;
+  border-radius: 8px;
+  background: #151922;
+  box-shadow: 0 22px 70px rgb(0 0 0 / 45%);
+}
+
+.json-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px;
+  border-bottom: 1px solid #252b36;
+}
+
+.json-modal pre {
+  height: auto;
+  min-height: 0;
+  font-size: 13px;
 }
 
 .spin {
@@ -437,5 +525,13 @@ pre {
 
   .send-button {
     width: 100%;
+  }
+
+  .trace-actions {
+    width: 100%;
+  }
+
+  .trace-actions .icon-button {
+    flex: 1;
   }
 }
