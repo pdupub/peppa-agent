@@ -7,10 +7,10 @@ from typing import Any
 from peppa.config import PeppaSettings
 from peppa.memory import Storage, TraceRecord
 from peppa.models import ModelClient
+from peppa.prompts import load_prompt
 
 
-SYSTEM_PROMPT = """你是 Peppa，一个处于早期开发阶段的 AI agent。
-请用清晰、自然、可靠的方式回答用户。当前版本重点是形成最小调试闭环，因此你不需要假装拥有复杂工具或长期记忆能力。"""
+SYSTEM_PROMPT_PATH = "agent/system.md"
 
 
 @dataclass(frozen=True)
@@ -61,7 +61,7 @@ class Agent:
 
         memory_hits: list[dict[str, Any]] = []
         prompt_messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": load_prompt(SYSTEM_PROMPT_PATH)},
             {"role": "user", "content": clean_message},
         ]
 
