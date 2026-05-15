@@ -25,6 +25,11 @@ const NODE_COLORS: Record<string, { fill: string; stroke: string }> = {
 };
 
 const DEFAULT_NODE_COLOR = { fill: '#394150', stroke: '#aeb8c6' };
+const MAX_NODE_VISUAL_SIZE = 54;
+const MIN_NODE_VISUAL_SIZE = 30;
+const LAYOUT_NODE_SIZE = 92;
+const LAYOUT_NODE_SPACING = 34;
+const LAYOUT_PADDING = 64;
 
 export function MemoryGraphPage({ onBack }: { onBack: () => void }) {
   const [memoryGraph, setMemoryGraph] = useState<MemoryGraphResponse | null>(null);
@@ -94,15 +99,12 @@ export function MemoryGraphPage({ onBack }: { onBack: () => void }) {
         height: container.clientHeight,
         data: resolvedData,
         animation: false,
-        layout: {
-          type: 'force',
-          preventOverlap: true,
-          linkDistance: 150,
-          nodeStrength: -360,
-          edgeStrength: 0.18,
-          iterations: 260,
-          animation: false
-        },
+        layout: buildGraphLayout({
+          nodeCount: resolvedData.nodes?.length ?? 0,
+          edgeCount: resolvedData.edges?.length ?? 0,
+          width: container.clientWidth,
+          height: container.clientHeight
+        }),
         node: {
           type: 'circle',
           style: (datum) => nodeStyle(datum.data)
@@ -344,10 +346,9 @@ function toG6Data(memoryGraph: MemoryGraphResponse): GraphData {
 function nodeStyle(payload: Record<string, unknown> | undefined) {
   const node = isMemoryGraphNode(payload) ? payload : null;
   const color = nodeColor(node?.type ?? '');
-  const mentionCount = node?.mention_count ?? 1;
 
   return {
-    size: Math.min(54, 30 + mentionCount * 3),
+    size: nodeVisualSize(node),
     fill: color.fill,
     stroke: color.stroke,
     lineWidth: 2,
@@ -363,6 +364,85 @@ function nodeStyle(payload: Record<string, unknown> | undefined) {
     labelBackgroundRadius: 4,
     labelPadding: [3, 5]
   };
+}
+
+function buildGraphLayout({
+  nodeCount,
+  edgeCount,
+  width,
+  height
+}: {
+  nodeCount: number;
+  edgeCount: number;
+  width: number;
+  height: number;
+}) {
+  const layoutWidth = Math.max(width - LAYOUT_PADDING * 2, LAYOUT_NODE_SIZE);
+  const layoutHeight = Math.max(height - LAYOUT_PADDING * 2, LAYOUT_NODE_SIZE);
+
+  if (edgeCount === 0) {
+    return {
+      type: 'grid',
+      width: layoutWidth,
+      height: layoutHeight,
+      begin: [LAYOUT_PADDING, LAYOUT_PADDING],
+      preventOverlap: true,
+      nodeSize: LAYOUT_NODE_SIZE,
+      nodeSpacing: LAYOUT_NODE_SPACING,
+      condense: false,
+      cols: preferredGridColumns(nodeCount, layoutWidth, layoutHeight),
+      sortBy: 'id'
+    };
+  }
+
+  return {
+    type: 'd3-force',
+    width,
+    height,
+    centerX: width / 2,
+    centerY: height / 2,
+    centerStrength: 0.08,
+    nodeSize: LAYOUT_NODE_SIZE,
+    nodeSpacing: LAYOUT_NODE_SPACING,
+    preventOverlap: true,
+    collideStrength: 1,
+    collideIterations: 4,
+    linkDistance: 180,
+    edgeStrength: 0.2,
+    nodeStrength: -620,
+    iterations: 360,
+    alphaDecay: 0.025,
+    velocityDecay: 0.45,
+    collide: {
+      radius: LAYOUT_NODE_SIZE / 2,
+      strength: 1,
+      iterations: 4
+    },
+    manyBody: {
+      strength: -620,
+      distanceMin: 48,
+      distanceMax: 620
+    },
+    center: {
+      x: width / 2,
+      y: height / 2,
+      strength: 0.08
+    }
+  };
+}
+
+function preferredGridColumns(nodeCount: number, width: number, height: number): number {
+  if (nodeCount <= 1) {
+    return 1;
+  }
+
+  const aspectRatio = Math.max(width, 1) / Math.max(height, 1);
+  return Math.max(1, Math.ceil(Math.sqrt(nodeCount * aspectRatio)));
+}
+
+function nodeVisualSize(node: MemoryGraphNode | null): number {
+  const mentionCount = node?.mention_count ?? 1;
+  return Math.min(MAX_NODE_VISUAL_SIZE, MIN_NODE_VISUAL_SIZE + mentionCount * 3);
 }
 
 function edgeStyle(payload: Record<string, unknown> | undefined) {
