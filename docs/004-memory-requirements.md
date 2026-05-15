@@ -596,6 +596,7 @@ tags: 记忆系统, 人类可读联想记忆图
 {
   "segments": [
     {
+      "source_trace_id": "trace_xxx",
       "text": "原始片段",
       "category": "user_preference",
       "retention": "semantic_memory",
@@ -604,11 +605,20 @@ tags: 记忆系统, 人类可读联想记忆图
   ],
   "memory_graph": {
     "tags": [],
-    "nodes": [],
-    "edges": []
+    "nodes": [
+      {
+        "source_trace_id": "trace_xxx"
+      }
+    ],
+    "edges": [
+      {
+        "source_trace_id": "trace_xxx"
+      }
+    ]
   },
   "document_suggestions": [
     {
+      "source_trace_id": "trace_xxx",
       "project": "Peppa",
       "document_type": "architecture",
       "summary": "建议写入项目架构文档的内容",
@@ -641,24 +651,20 @@ ignore
 - 不把寒暄和一次性百科问答错误记忆
 - 不记录 secret
 - 不编造 source_quote
+- 不编造 source_trace_id
 
 ## 当前实现边界
 
 当前项目中已经有 `/api/memory/extract` 入口和调试台手动触发按钮。
 
-这个入口应被视为未来正式记忆写入流程的前半段，而不是单独的临时实验入口。当前阶段它只负责调用大模型完成 memory extraction，并把原始 request/response 保存为 trace，暂时不把返回内容写入记忆图。
+这个入口应被视为未来正式记忆写入流程的前半段，而不是单独的临时实验入口。当前阶段它负责调用大模型完成 memory extraction，保存原始 request/response，并把有效的 tool call 参数写入本地记忆图和抽取记录表。
 
 当前尚未实现：
 
-- 正式记忆图 schema
-- tag 写入
-- node 写入
-- edge 写入
-- source 链接
-- document 写入建议处理
 - recall
 - memory context 注入
-- 去重和合并
+- 文档自动写入
+- 复杂 node merge
 - supersedes 处理
 
-下一步应先调试和稳定 memory extraction 的 prompt 与 tool schema，再进入正式写入和召回实现。
+下一步应先调试和稳定 memory extraction 的 prompt、tool schema 和写入质量，再进入召回实现。

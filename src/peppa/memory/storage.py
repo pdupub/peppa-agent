@@ -9,6 +9,7 @@ import sqlite3
 import uuid
 
 from peppa.paths import DATABASE_PATH, ensure_runtime_dirs
+from peppa.memory.graph import ensure_memory_graph_schema
 
 
 @dataclass(frozen=True)
@@ -94,6 +95,7 @@ class Storage:
                     ON traces(created_at DESC);
                 """
             )
+            ensure_memory_graph_schema(connection)
 
     def create_conversation(self, title: str) -> str:
         conversation_id = _new_id("conv")

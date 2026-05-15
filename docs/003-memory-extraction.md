@@ -12,7 +12,7 @@
 - `segments`、`memory_graph`、`document_suggestions` 的内容质量是否足够好
 - 内容去向是否符合 `semantic_memory`、`external_document`、`trace_only`、`ignore` 的边界
 
-只有抽取规则稳定后，后续才会进入正式记忆图写入、去重合并和召回流程。
+抽取结果稳定后，后续会继续进入 recall 和 memory context 注入流程。
 
 ## 使用方式
 
@@ -27,8 +27,11 @@
 - 加载 `skills/memory-extraction/SKILL.md` 作为 system 内容
 - 使用 `tool_choice = "auto"`，让模型优先通过 `record_memory_graph_update` 返回结构化结果
 - 将原始 request 和 response 保存为一条新的 trace
+- 解析 `record_memory_graph_update` 的 tool call 参数
+- 将有效的 tags、nodes、edges 写入当前记忆图
+- 将 segments、node/edge/tag observations、document suggestions 写入抽取记录表
 
-生成结果当前不做额外处理。可以直接在调试台的 `Response` 面板中查看模型返回的原始 `tool_calls`。
+生成结果会写入本地 SQLite。也可以直接在调试台的 `Response` 面板中查看模型返回的原始 `tool_calls`。
 
 如果模型没有调用 tool，或者 provider 对 tools 支持不稳定，也会直接体现在 `Response` 或 `error` 中。
 
@@ -54,13 +57,10 @@
 
 当前阶段不实现：
 
-- tags 写入
-- nodes 写入
-- edges 写入
-- 去重合并
-- source 链接
-- graph 持久化
 - memory recall
 - memory context 注入
+- 文档自动写入
+- 复杂 node merge
+- `supersedes` 的真实覆盖逻辑
 
-当前目标是稳定 memory extraction 的 skill 与 tool schema。数据库中只记录这次模型调用的 trace，尚不把返回内容写入记忆图。
+当前已实现第一版持久化：按 `type + normalized_title` 去重 node，按 `source_node_id + target_node_id + relation_type` 去重 edge，按 `normalized_name` 去重 tag。每次抽取仍会额外记录 observation，用于追溯来源和统计提及频率。

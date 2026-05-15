@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from peppa import __version__
 from peppa.config import ConfigError, load_settings
 from peppa.core import Agent
-from peppa.memory import Storage, memory_graph_update_tools, memory_tool_choice
+from peppa.memory import MemoryGraphStore, Storage, memory_graph_update_tools, memory_tool_choice
 from peppa.models import ModelClient
 from peppa.paths import DATABASE_PATH, ROOT_DIR, WEB_DIST_DIR, ensure_runtime_dirs
 from peppa.prompts import load_skill
@@ -45,6 +45,7 @@ def create_app() -> FastAPI:
     ensure_runtime_dirs()
     storage = Storage()
     storage.initialize()
+    memory_graph_store = MemoryGraphStore()
 
     app = FastAPI(title="Peppa", version=__version__)
     app.add_middleware(
@@ -173,6 +174,13 @@ def create_app() -> FastAPI:
             duration_ms=duration_ms,
             error=error,
         )
+        if response_payload is not None:
+            memory_graph_store.record_response_tool_calls(
+                extraction_trace_id=trace.id,
+                model=model_settings.model,
+                response_payload=response_payload,
+                source_trace_ids=[source_trace.id for source_trace in selected_traces],
+            )
 
         return MemoryExtractionResponse(trace=trace.public_dict())
 

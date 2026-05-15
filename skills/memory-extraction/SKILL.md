@@ -31,6 +31,8 @@ document 保持工程化和精确内容
   -> 如果进入 external_document，语义记忆只保留项目或主题索引入口
 ```
 
+输入上下文中的每一轮都会包含 `trace_id`。当你输出 `segments`、`memory_graph.nodes`、`memory_graph.edges`、`document_suggestions` 时，必须填写 `source_trace_id`，且只能使用输入中真实出现的 `trace_id`，不能编造。
+
 ## 内容去向
 
 通常进入 `semantic_memory`：
@@ -176,11 +178,11 @@ conflicts_with
 工具参数应包含：
 
 ```text
-segments: 对输入内容的分类、保留位置、理由和置信度
+segments: 对输入内容的分类、保留位置、理由、置信度和 source_trace_id
 memory_graph.tags: 可用于未来回忆的显式词和联想词
-memory_graph.nodes: 适合进入语义记忆图的对象、实体、概念或活动
-memory_graph.edges: node 之间的有限类型关系，字段名使用 relation_type
-document_suggestions: 适合进入外部文档的大段、精确或工程化内容
+memory_graph.nodes: 适合进入语义记忆图的对象、实体、概念或活动，并包含 source_trace_id
+memory_graph.edges: node 之间的有限类型关系，字段名使用 relation_type，并包含 source_trace_id
+document_suggestions: 适合进入外部文档的大段、精确或工程化内容，并包含 source_trace_id
 ```
 
 提取时要保守：
