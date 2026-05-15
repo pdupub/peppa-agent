@@ -42,12 +42,12 @@ export function sendChat(params: {
   });
 }
 
-export function testMemoryToolCall(params: {
+export function extractMemory(params: {
   traceIds: string[];
   model: string;
   temperature: number;
 }): Promise<{ trace: TraceRecord }> {
-  return requestJson<{ trace: TraceRecord }>('/api/memory/tool-call-test', {
+  return requestJson<{ trace: TraceRecord }>('/api/memory/extract', {
     method: 'POST',
     body: JSON.stringify({
       trace_ids: params.traceIds,

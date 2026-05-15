@@ -13,7 +13,7 @@ import {
   Settings2,
   Sparkles
 } from 'lucide-react';
-import { fetchConfig, fetchTraces, sendChat, testMemoryToolCall } from './api';
+import { extractMemory, fetchConfig, fetchTraces, sendChat } from './api';
 import type { PublicConfig, TraceRecord } from './types';
 import './styles.css';
 
@@ -34,7 +34,7 @@ function App() {
   const [traces, setTraces] = useState<TraceRecord[]>([]);
   const [selectedTraceIds, setSelectedTraceIds] = useState<Set<string>>(() => new Set());
   const [isSending, setIsSending] = useState(false);
-  const [isTestingMemory, setIsTestingMemory] = useState(false);
+  const [isExtractingMemory, setIsExtractingMemory] = useState(false);
   const [expandedJsonPanel, setExpandedJsonPanel] = useState<{
     title: string;
     value: unknown;
@@ -148,19 +148,19 @@ function App() {
     });
   }
 
-  async function handleMemoryToolTest() {
+  async function handleMemoryExtraction() {
     const selectedTraces = traces
       .filter((trace) => selectedTraceIds.has(trace.id) && !isToolCallTrace(trace))
       .sort((left, right) => left.created_at.localeCompare(right.created_at));
 
-    if (selectedTraces.length === 0 || !selectedModel || isTestingMemory) {
+    if (selectedTraces.length === 0 || !selectedModel || isExtractingMemory) {
       return;
     }
 
-    setIsTestingMemory(true);
+    setIsExtractingMemory(true);
     setError(null);
     try {
-      const result = await testMemoryToolCall({
+      const result = await extractMemory({
         traceIds: selectedTraces.map((trace) => trace.id),
         model: selectedModel,
         temperature: selectedTemperature
@@ -169,10 +169,10 @@ function App() {
       setSelectedTraceIds(new Set());
       const nextTraces = await fetchTraces();
       applyTraces(nextTraces.traces);
-    } catch (testError) {
-      setError(testError instanceof Error ? testError.message : 'Memory tool test failed.');
+    } catch (extractError) {
+      setError(extractError instanceof Error ? extractError.message : 'Memory extraction failed.');
     } finally {
-      setIsTestingMemory(false);
+      setIsExtractingMemory(false);
     }
   }
 
@@ -284,11 +284,11 @@ function App() {
               <button
                 className="icon-button"
                 type="button"
-                onClick={() => void handleMemoryToolTest()}
-                disabled={selectedTraceCount === 0 || isTestingMemory}
+                onClick={() => void handleMemoryExtraction()}
+                disabled={selectedTraceCount === 0 || isExtractingMemory}
               >
-                {isTestingMemory ? <RefreshCw className="spin" size={16} /> : <Database size={16} />}
-                <span>{isTestingMemory ? 'Testing' : `Memory ${selectedTraceCount}`}</span>
+                {isExtractingMemory ? <RefreshCw className="spin" size={16} /> : <Database size={16} />}
+                <span>{isExtractingMemory ? 'Extracting' : `Extract ${selectedTraceCount}`}</span>
               </button>
               <button className="icon-button" type="button" onClick={() => void refreshTraces()}>
                 <RefreshCw size={16} />
@@ -495,7 +495,7 @@ function clampTemperature(value: number): number {
 
 function isToolCallTrace(trace: TraceRecord): boolean {
   const requestMeta = getRecord(trace.request_payload._peppa);
-  if (requestMeta?.kind === 'memory_tool_test') {
+  if (requestMeta?.kind === 'memory_extraction') {
     return true;
   }
 

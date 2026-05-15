@@ -16,7 +16,7 @@ from peppa.core import Agent
 from peppa.memory import Storage, memory_graph_update_tools, memory_tool_choice
 from peppa.models import ModelClient
 from peppa.paths import DATABASE_PATH, ROOT_DIR, WEB_DIST_DIR, ensure_runtime_dirs
-from peppa.prompts import load_prompt
+from peppa.prompts import load_skill
 
 
 class ChatRequest(BaseModel):
@@ -31,13 +31,13 @@ class ChatResponse(BaseModel):
     trace: dict[str, Any]
 
 
-class MemoryToolTestRequest(BaseModel):
+class MemoryExtractionRequest(BaseModel):
     trace_ids: list[str] = Field(min_length=1, max_length=20)
     model: str | None = None
     temperature: float = Field(default=1.0, ge=0.0, le=2.0)
 
 
-class MemoryToolTestResponse(BaseModel):
+class MemoryExtractionResponse(BaseModel):
     trace: dict[str, Any]
 
 
@@ -102,8 +102,8 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Trace not found.")
         return record.public_dict()
 
-    @app.post("/api/memory/tool-call-test", response_model=MemoryToolTestResponse)
-    async def memory_tool_call_test(request: MemoryToolTestRequest) -> MemoryToolTestResponse:
+    @app.post("/api/memory/extract", response_model=MemoryExtractionResponse)
+    async def extract_memory(request: MemoryExtractionRequest) -> MemoryExtractionResponse:
         try:
             settings = load_settings()
             model_settings = settings.get_model(request.model)
@@ -118,12 +118,12 @@ def create_app() -> FastAPI:
             if _is_tool_call_trace(record.public_dict()):
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Tool-call traces cannot be used as memory test input: {trace_id}",
+                    detail=f"Memory extraction traces cannot be used as input: {trace_id}",
                 )
             selected_traces.append(record)
 
         selected_traces.sort(key=lambda item: item.created_at)
-        prompt_messages = _build_memory_tool_test_messages(
+        prompt_messages = _build_memory_extraction_messages(
             [trace.public_dict() for trace in selected_traces]
         )
         tools = memory_graph_update_tools()
@@ -137,7 +137,7 @@ def create_app() -> FastAPI:
             temperature=request.temperature,
         )
         request_payload["_peppa"] = {
-            "kind": "memory_tool_test",
+            "kind": "memory_extraction",
             "source_trace_ids": request.trace_ids,
             "source_trace_order": [trace.id for trace in selected_traces],
         }
@@ -159,12 +159,12 @@ def create_app() -> FastAPI:
         except Exception as exc:
             error = str(exc)
 
-        conversation_id = storage.create_conversation("Memory tool-call test")
+        conversation_id = storage.create_conversation("Memory extraction")
         duration_ms = int((perf_counter() - started_at) * 1000)
         trace = storage.create_trace(
             conversation_id=conversation_id,
             model=model_settings.model,
-            user_message=f"Memory tool-call test from {len(selected_traces)} trace(s)",
+            user_message=f"Memory extraction from {len(selected_traces)} trace(s)",
             assistant_message=assistant_message,
             prompt_messages=prompt_messages,
             memory_hits=[],
@@ -174,13 +174,13 @@ def create_app() -> FastAPI:
             error=error,
         )
 
-        return MemoryToolTestResponse(trace=trace.public_dict())
+        return MemoryExtractionResponse(trace=trace.public_dict())
 
     mount_web_app(app, WEB_DIST_DIR)
     return app
 
 
-def _build_memory_tool_test_messages(source_traces: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _build_memory_extraction_messages(source_traces: list[dict[str, Any]]) -> list[dict[str, Any]]:
     context_blocks = []
     for index, trace in enumerate(source_traces, start=1):
         assistant_text = trace.get("assistant_message") or trace.get("error") or ""
@@ -199,7 +199,7 @@ def _build_memory_tool_test_messages(source_traces: list[dict[str, Any]]) -> lis
     return [
         {
             "role": "system",
-            "content": load_prompt("memory/tool-call-test-system.md"),
+            "content": load_skill("memory-extraction/SKILL.md"),
         },
         {
             "role": "user",
@@ -210,7 +210,7 @@ def _build_memory_tool_test_messages(source_traces: list[dict[str, Any]]) -> lis
 
 def _is_tool_call_trace(trace: dict[str, Any]) -> bool:
     request_meta = trace.get("request_payload", {}).get("_peppa")
-    if isinstance(request_meta, dict) and request_meta.get("kind") == "memory_tool_test":
+    if isinstance(request_meta, dict) and request_meta.get("kind") == "memory_extraction":
         return True
 
     response_payload = trace.get("response_payload")
