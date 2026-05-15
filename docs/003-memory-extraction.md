@@ -28,12 +28,43 @@
 - 使用 `tool_choice = "auto"`，让模型优先通过 `record_memory_graph_update` 返回结构化结果
 - 将原始 request 和 response 保存为一条新的 trace
 - 解析 `record_memory_graph_update` 的 tool call 参数
+- 在参数已经是合法 JSON 的前提下，对 `tags`、`nodes`、`edges` 做一次轻量格式归位
 - 将有效的 tags、nodes、edges 写入当前记忆图
 - 将 segments、node/edge/tag observations、document suggestions 写入抽取记录表
 
 生成结果会写入本地 SQLite。也可以直接在调试台的 `Response` 面板中查看模型返回的原始 `tool_calls`。
 
 如果模型没有调用 tool，或者 provider 对 tools 支持不稳定，也会直接体现在 `Response` 或 `error` 中。
+
+## 格式归位
+
+部分 OpenAI-compatible provider 能返回合法 JSON，但字段位置可能不完全符合 schema。例如模型可能返回：
+
+```json
+{
+  "memory_graph": {
+    "tags": [],
+    "nodes": []
+  },
+  "edges": []
+}
+```
+
+标准结构应为：
+
+```json
+{
+  "memory_graph": {
+    "tags": [],
+    "nodes": [],
+    "edges": []
+  }
+}
+```
+
+因此在 JSON 解析成功之后、写入记忆图之前，会做一次轻量格式归位：递归查找符合 graph schema 形状的 `tags`、`nodes`、`edges`，并合并到 `memory_graph` 的标准字段中。
+
+这个步骤只移动结构位置，不修改 tag 名称、node 标题、edge 关系类型或其他语义内容。如果原始返回已经符合标准结构，内容保持等价。若 tool call 参数本身不是合法 JSON，则不会尝试修复，仍会记录为失败。
 
 ## 输入范围
 
