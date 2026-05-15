@@ -5,6 +5,11 @@ from typing import Any
 import httpx
 
 from peppa.config import ModelSettings
+from peppa.models.tool_calls import (
+    ToolCall,
+    build_chat_request_payload,
+    select_tool_call_adapter,
+)
 
 
 class ModelClientError(RuntimeError):
@@ -16,6 +21,7 @@ class ModelResponse:
     content: str
     request_payload: dict[str, Any]
     response_payload: dict[str, Any]
+    tool_calls: list[ToolCall]
 
 
 class ModelClient:
@@ -32,7 +38,7 @@ class ModelClient:
         temperature: float = 1.0,
     ) -> ModelResponse:
         request_payload = self.build_request_payload(
-            model=model_settings.model,
+            model_settings=model_settings,
             messages=messages,
             tools=tools,
             tool_choice=tool_choice,
@@ -61,32 +67,34 @@ class ModelClient:
             raise ModelClientError("Model API returned a non-JSON response.") from exc
 
         content = _extract_message_content(response_payload)
+        tool_calls = select_tool_call_adapter(model_settings).parse_response_tool_calls(
+            response_payload
+        )
         return ModelResponse(
             content=content,
             request_payload=request_payload,
             response_payload=response_payload,
+            tool_calls=tool_calls,
         )
 
     def build_request_payload(
         self,
         *,
-        model: str,
+        model_settings: ModelSettings | None = None,
+        model: str | None = None,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
         temperature: float = 1.0,
     ) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-            "stream": False,
-        }
-        if tools:
-            payload["tools"] = tools
-        if tool_choice is not None:
-            payload["tool_choice"] = tool_choice
-        return payload
+        return build_chat_request_payload(
+            model_settings=model_settings,
+            model=model,
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            temperature=temperature,
+        )
 
 
 def _extract_message_content(payload: dict[str, Any]) -> str:

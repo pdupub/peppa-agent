@@ -26,8 +26,9 @@
 - 调用 `/api/memory/extract`
 - 加载 `skills/memory-extraction/SKILL.md` 作为 system 内容
 - 使用 `tool_choice = "auto"`，让模型优先通过 `record_memory_graph_update` 返回结构化结果
+- 通过模型配置中的 `tool_adapter` 生成实际请求，并解析 provider 返回的 tool calls
 - 将原始 request 和 response 保存为一条新的 trace
-- 解析 `record_memory_graph_update` 的 tool call 参数
+- 从统一后的 tool calls 中筛选 `record_memory_graph_update`
 - 在参数已经是合法 JSON 的前提下，对 `tags`、`nodes`、`edges` 做一次轻量格式归位
 - 将有效的 tags、nodes、edges 写入当前记忆图
 - 将 segments、node/edge/tag observations、document suggestions 写入抽取记录表
@@ -35,6 +36,26 @@
 生成结果会写入本地 SQLite。也可以直接在调试台的 `Response` 面板中查看模型返回的原始 `tool_calls`。
 
 如果模型没有调用 tool，或者 provider 对 tools 支持不稳定，也会直接体现在 `Response` 或 `error` 中。
+
+## Tool Call Adapter
+
+记忆抽取不直接解析不同 provider 的原始 response。模型调用层会先把返回值解析成统一的 tool call 结构：
+
+- `id`
+- `name`
+- `arguments_raw`
+- `arguments`
+- `parse_error`
+
+记忆模块只关心 `name == record_memory_graph_update` 的 tool call。其他 tool call 会被忽略。
+
+当前 adapter 行为：
+
+- `deepseek`：保持标准 OpenAI-compatible tool call 格式
+- `qwen`：携带 tools 时添加 `enable_thinking = false`
+- `kimi`：为 function tool 添加 `strict = false`，`kimi-k2.6` 携带 tools 时添加 `thinking = { type = "disabled" }`
+
+这个 adapter 是通用模型能力，不包含 memory schema。未来如果其他功能需要 tool call，应复用同一层适配，只替换自己的 tool schema 和业务处理逻辑。
 
 ## 格式归位
 

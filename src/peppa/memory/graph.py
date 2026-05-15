@@ -18,6 +18,7 @@ from peppa.memory.tool_schema import (
     SEGMENT_CATEGORIES,
     TAG_KINDS,
 )
+from peppa.models.tool_calls import ToolCall
 from peppa.paths import DATABASE_PATH
 
 
@@ -219,39 +220,39 @@ class MemoryGraphStore:
         with self._connect() as connection:
             ensure_memory_graph_schema(connection)
 
-    def record_response_tool_calls(
+    def record_tool_calls(
         self,
         *,
         extraction_trace_id: str,
         model: str,
-        response_payload: dict[str, Any],
+        tool_calls: list[ToolCall],
         source_trace_ids: list[str],
     ) -> list[str]:
         run_ids = []
-        for tool_call in _memory_tool_calls(response_payload):
-            raw_arguments = tool_call.get("raw_arguments")
-            try:
-                arguments = _parse_arguments(raw_arguments)
-                # Comment out this line to use provider tool-call arguments exactly as returned.
-                arguments = _normalize_memory_graph_arguments(arguments)
-            except ValueError as exc:
+        for tool_call in tool_calls:
+            if tool_call.name != MEMORY_TOOL_NAME:
+                continue
+            raw_arguments = tool_call.arguments_raw
+            if tool_call.parse_error or tool_call.arguments is None:
                 run_ids.append(
                     self._record_failed_run(
                         extraction_trace_id=extraction_trace_id,
                         model=model,
-                        tool_call_id=tool_call.get("id"),
+                        tool_call_id=tool_call.id,
                         source_trace_ids=source_trace_ids,
                         raw_arguments=raw_arguments,
-                        error=str(exc),
+                        error=tool_call.parse_error or "Tool call arguments are missing.",
                     )
                 )
                 continue
 
+            # Comment out this line to use provider tool-call arguments exactly as returned.
+            arguments = _normalize_memory_graph_arguments(tool_call.arguments)
             run_ids.append(
                 self.record_memory_graph_update(
                     extraction_trace_id=extraction_trace_id,
                     model=model,
-                    tool_call_id=tool_call.get("id"),
+                    tool_call_id=tool_call.id,
                     source_trace_ids=source_trace_ids,
                     arguments=arguments,
                 )
@@ -1147,44 +1148,6 @@ class MemoryGraphStore:
         connection = sqlite3.connect(self.database_path)
         connection.row_factory = sqlite3.Row
         return connection
-
-
-def _memory_tool_calls(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    choices = payload.get("choices")
-    if not isinstance(choices, list):
-        return []
-
-    tool_calls = []
-    for choice in choices:
-        choice_record = _as_record(choice)
-        message = _as_record(choice_record.get("message"))
-        for tool_call in _as_list(message.get("tool_calls")):
-            tool_record = _as_record(tool_call)
-            function = _as_record(tool_record.get("function"))
-            if function.get("name") != MEMORY_TOOL_NAME:
-                continue
-            tool_calls.append(
-                {
-                    "id": _clean_text(tool_record.get("id")) or None,
-                    "raw_arguments": function.get("arguments"),
-                }
-            )
-    return tool_calls
-
-
-def _parse_arguments(raw_arguments: Any) -> dict[str, Any]:
-    if isinstance(raw_arguments, dict):
-        return raw_arguments
-    if isinstance(raw_arguments, str):
-        if not raw_arguments.strip():
-            raise ValueError("Tool call arguments are empty.")
-        try:
-            parsed = json.loads(raw_arguments)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Tool call arguments are not valid JSON: {exc}") from exc
-        if isinstance(parsed, dict):
-            return parsed
-    raise ValueError("Tool call arguments must be a JSON object.")
 
 
 def _normalize_memory_graph_arguments(arguments: dict[str, Any]) -> dict[str, Any]:

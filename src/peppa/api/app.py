@@ -135,7 +135,7 @@ def create_app() -> FastAPI:
         tool_choice = memory_tool_choice()
         model_client = ModelClient()
         request_payload = model_client.build_request_payload(
-            model=model_settings.model,
+            model_settings=model_settings,
             messages=prompt_messages,
             tools=tools,
             tool_choice=tool_choice,
@@ -148,6 +148,7 @@ def create_app() -> FastAPI:
         }
 
         response_payload: dict[str, Any] | None = None
+        response_tool_calls = []
         assistant_message: str | None = None
         error: str | None = None
         started_at = perf_counter()
@@ -160,6 +161,7 @@ def create_app() -> FastAPI:
                 temperature=request.temperature,
             )
             response_payload = response.response_payload
+            response_tool_calls = response.tool_calls
             assistant_message = response.content
         except Exception as exc:
             error = str(exc)
@@ -179,10 +181,10 @@ def create_app() -> FastAPI:
             error=error,
         )
         if response_payload is not None:
-            memory_graph_store.record_response_tool_calls(
+            memory_graph_store.record_tool_calls(
                 extraction_trace_id=trace.id,
                 model=model_settings.model,
-                response_payload=response_payload,
+                tool_calls=response_tool_calls,
                 source_trace_ids=[source_trace.id for source_trace in selected_traces],
             )
 

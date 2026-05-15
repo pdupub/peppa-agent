@@ -66,7 +66,7 @@ class Agent:
         ]
 
         request_payload = self.model_client.build_request_payload(
-            model=model_settings.model,
+            model_settings=model_settings,
             messages=prompt_messages,
             temperature=temperature,
         )

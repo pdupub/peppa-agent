@@ -17,6 +17,7 @@ class ModelSettings:
     model: str
     base_url: str
     api_key: str
+    tool_adapter: str = "auto"
 
     @property
     def chat_completions_url(self) -> str:
@@ -27,6 +28,7 @@ class ModelSettings:
             "model": self.model,
             "base_url": self.base_url,
             "has_api_key": bool(self.api_key),
+            "tool_adapter": self.tool_adapter,
         }
 
 
@@ -69,11 +71,19 @@ def load_settings(path: Path = CONFIG_PATH) -> PeppaSettings:
         model_name = _required_string(raw_model, "model", index)
         base_url = _required_string(raw_model, "base_url", index)
         api_key = _required_string(raw_model, "api_key", index)
+        tool_adapter = _optional_string(raw_model, "tool_adapter", "auto")
 
         if model_name in seen:
             raise ConfigError(f"Duplicate model in config.toml: {model_name}")
         seen.add(model_name)
-        models.append(ModelSettings(model=model_name, base_url=base_url, api_key=api_key))
+        models.append(
+            ModelSettings(
+                model=model_name,
+                base_url=base_url,
+                api_key=api_key,
+                tool_adapter=tool_adapter,
+            )
+        )
 
     app_config = data.get("app", {})
     if app_config is None:
@@ -94,4 +104,13 @@ def _required_string(raw_model: dict[str, Any], key: str, index: int) -> str:
     value = raw_model.get(key)
     if not isinstance(value, str) or not value.strip():
         raise ConfigError(f"Model entry #{index} must define a non-empty {key!r}.")
+    return value.strip()
+
+
+def _optional_string(raw_model: dict[str, Any], key: str, default: str) -> str:
+    value = raw_model.get(key, default)
+    if value is None:
+        return default
+    if not isinstance(value, str) or not value.strip():
+        return default
     return value.strip()
