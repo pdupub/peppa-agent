@@ -314,6 +314,65 @@ h2 {
   gap: 8px;
 }
 
+.selection-toggle {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid #2b3340;
+  border-radius: 8px;
+  background: #10141b;
+}
+
+.selection-toggle:hover {
+  border-color: #3a4a5e;
+  background: #18202a;
+}
+
+.selection-toggle:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.selection-toggle input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #8ed7c6;
+}
+
+.trace-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.trace-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid #252b36;
+  border-radius: 8px;
+  background: #10141b;
+  color: #8c95a5;
+  font-size: 12px;
+}
+
+.trace-tab:hover,
+.trace-tab.active {
+  border-color: #407266;
+  background: #12201f;
+  color: #dbe1ea;
+}
+
+.trace-tab span {
+  color: #8ed7c6;
+  font-size: 11px;
+}
+
 .trace-item {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr);

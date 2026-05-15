@@ -21,6 +21,7 @@ const DEFAULT_TEMPERATURE = 1;
 const MIN_TEMPERATURE = 0;
 const MAX_TEMPERATURE = 2;
 const TEMPERATURE_STORAGE_KEY = 'peppa.temperatureByModel.v1';
+type TraceTab = 'history' | 'memory';
 
 function App() {
   const [config, setConfig] = useState<PublicConfig | null>(null);
@@ -33,6 +34,7 @@ function App() {
   const [activeTrace, setActiveTrace] = useState<TraceRecord | null>(null);
   const [traces, setTraces] = useState<TraceRecord[]>([]);
   const [selectedTraceIds, setSelectedTraceIds] = useState<Set<string>>(() => new Set());
+  const [activeTraceTab, setActiveTraceTab] = useState<TraceTab>('history');
   const [isSending, setIsSending] = useState(false);
   const [isExtractingMemory, setIsExtractingMemory] = useState(false);
   const [expandedJsonPanel, setExpandedJsonPanel] = useState<{
@@ -126,7 +128,9 @@ function App() {
     setTraces(nextTraces);
     setSelectedTraceIds((current) => {
       const selectableTraceIds = new Set(
-        nextTraces.filter((trace) => !isToolCallTrace(trace)).map((trace) => trace.id)
+        nextTraces
+          .filter((trace) => !isMemoryExtractionTrace(trace) && !isToolCallTrace(trace))
+          .map((trace) => trace.id)
       );
       return new Set([...current].filter((traceId) => selectableTraceIds.has(traceId)));
     });
@@ -166,7 +170,6 @@ function App() {
         temperature: selectedTemperature
       });
       setActiveTrace(result.trace);
-      setSelectedTraceIds(new Set());
       const nextTraces = await fetchTraces();
       applyTraces(nextTraces.traces);
     } catch (extractError) {
@@ -180,8 +183,34 @@ function App() {
     () => config?.models.find((model) => model.model === selectedModel),
     [config, selectedModel]
   );
+  const historyTraces = useMemo(
+    () => traces.filter((trace) => !isMemoryExtractionTrace(trace)),
+    [traces]
+  );
+  const memoryExtractionTraces = useMemo(
+    () => traces.filter((trace) => isMemoryExtractionTrace(trace)),
+    [traces]
+  );
+  const visibleTraces = activeTraceTab === 'history' ? historyTraces : memoryExtractionTraces;
+  const selectableHistoryTraceIds = useMemo(
+    () => historyTraces.filter((trace) => !isToolCallTrace(trace)).map((trace) => trace.id),
+    [historyTraces]
+  );
   const selectedTemperature = temperatureByModel[selectedModel] ?? DEFAULT_TEMPERATURE;
   const selectedTraceCount = selectedTraceIds.size;
+  const isAllHistorySelected =
+    selectableHistoryTraceIds.length > 0 &&
+    selectableHistoryTraceIds.every((traceId) => selectedTraceIds.has(traceId));
+  const selectionToggleLabel = isAllHistorySelected ? 'Clear selection' : 'Select all history traces';
+
+  function handleToggleHistorySelection() {
+    setSelectedTraceIds(() => {
+      if (isAllHistorySelected) {
+        return new Set();
+      }
+      return new Set(selectableHistoryTraceIds);
+    });
+  }
 
   return (
     <main className="app-shell">
@@ -281,6 +310,15 @@ function App() {
               <p>{traces.length} loaded</p>
             </div>
             <div className="trace-actions">
+              <label className="selection-toggle" title={selectionToggleLabel}>
+                <input
+                  type="checkbox"
+                  checked={isAllHistorySelected}
+                  disabled={selectableHistoryTraceIds.length === 0}
+                  aria-label={selectionToggleLabel}
+                  onChange={handleToggleHistorySelection}
+                />
+              </label>
               <button
                 className="icon-button"
                 type="button"
@@ -297,7 +335,30 @@ function App() {
             </div>
           </div>
           <div className="trace-list">
-            {traces.map((trace) => {
+            <div className="trace-tabs" role="tablist" aria-label="Trace type">
+              <button
+                className={activeTraceTab === 'history' ? 'trace-tab active' : 'trace-tab'}
+                type="button"
+                role="tab"
+                aria-selected={activeTraceTab === 'history'}
+                onClick={() => setActiveTraceTab('history')}
+              >
+                History
+                <span>{historyTraces.length}</span>
+              </button>
+              <button
+                className={activeTraceTab === 'memory' ? 'trace-tab active' : 'trace-tab'}
+                type="button"
+                role="tab"
+                aria-selected={activeTraceTab === 'memory'}
+                onClick={() => setActiveTraceTab('memory')}
+              >
+                Memory Extraction
+                <span>{memoryExtractionTraces.length}</span>
+              </button>
+            </div>
+
+            {visibleTraces.map((trace) => {
               const isDisabled = isToolCallTrace(trace);
               return (
                 <div className={isDisabled ? 'trace-item disabled' : 'trace-item'} key={trace.id}>
@@ -322,7 +383,7 @@ function App() {
                 </div>
               );
             })}
-            {traces.length === 0 && <div className="empty-state">No traces yet.</div>}
+            {visibleTraces.length === 0 && <div className="empty-state">No traces yet.</div>}
           </div>
         </aside>
       </section>
@@ -493,9 +554,13 @@ function clampTemperature(value: number): number {
   return Math.min(MAX_TEMPERATURE, Math.max(MIN_TEMPERATURE, roundedValue));
 }
 
-function isToolCallTrace(trace: TraceRecord): boolean {
+function isMemoryExtractionTrace(trace: TraceRecord): boolean {
   const requestMeta = getRecord(trace.request_payload._peppa);
-  if (requestMeta?.kind === 'memory_extraction') {
+  return requestMeta?.kind === 'memory_extraction';
+}
+
+function isToolCallTrace(trace: TraceRecord): boolean {
+  if (isMemoryExtractionTrace(trace)) {
     return true;
   }
 
