@@ -14,6 +14,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import { extractMemory, fetchConfig, fetchTraces, sendChat } from './api';
+import { MemoryGraphPage } from './MemoryGraphPage';
 import type { PublicConfig, TraceRecord } from './types';
 import './styles.css';
 
@@ -22,8 +23,14 @@ const MIN_TEMPERATURE = 0;
 const MAX_TEMPERATURE = 2;
 const TEMPERATURE_STORAGE_KEY = 'peppa.temperatureByModel.v1';
 type TraceTab = 'history' | 'memory';
+type AppRoute = 'console' | 'memory';
+
+function initialRoute(): AppRoute {
+  return window.location.pathname === '/memory' ? 'memory' : 'console';
+}
 
 function App() {
+  const [route, setRoute] = useState<AppRoute>(initialRoute);
   const [config, setConfig] = useState<PublicConfig | null>(null);
   const [selectedModel, setSelectedModel] = useState('');
   const [temperatureByModel, setTemperatureByModel] = useState<Record<string, number>>(
@@ -45,6 +52,15 @@ function App() {
 
   useEffect(() => {
     void loadInitialData();
+  }, []);
+
+  useEffect(() => {
+    function handlePopState() {
+      setRoute(initialRoute());
+    }
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
   async function loadInitialData() {
@@ -212,6 +228,13 @@ function App() {
     });
   }
 
+  function navigate(nextRoute: AppRoute) {
+    const nextPath = nextRoute === 'memory' ? '/memory' : '/';
+    window.history.pushState({}, '', nextPath);
+    setExpandedJsonPanel(null);
+    setRoute(nextRoute);
+  }
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -241,6 +264,14 @@ function App() {
               ))}
             </select>
           </label>
+          <button
+            className={route === 'memory' ? 'icon-button active' : 'icon-button'}
+            type="button"
+            onClick={() => navigate('memory')}
+          >
+            <Database size={16} />
+            <span>Memory</span>
+          </button>
           <label className="temperature-control">
             <span>Temperature</span>
             <input
@@ -266,161 +297,170 @@ function App() {
         </div>
       )}
 
-      <section className="console-grid">
-        <section className="panel chat-panel" aria-label="Chat">
-          <div className="panel-header">
-            <div>
-              <h2>Chat Probe</h2>
-              <p>{activeModel?.base_url ?? 'Waiting for config'}</p>
-            </div>
-            <button className="icon-button" type="button" onClick={() => setConversationId(undefined)}>
-              <MessageSquare size={16} />
-              <span>New</span>
-            </button>
-          </div>
+      {route === 'memory' ? (
+        <MemoryGraphPage onBack={() => navigate('console')} />
+      ) : (
+        <>
+          <section className="console-grid">
+            <section className="panel chat-panel" aria-label="Chat">
+              <div className="panel-header">
+                <div>
+                  <h2>Chat Probe</h2>
+                  <p>{activeModel?.base_url ?? 'Waiting for config'}</p>
+                </div>
+                <button className="icon-button" type="button" onClick={() => setConversationId(undefined)}>
+                  <MessageSquare size={16} />
+                  <span>New</span>
+                </button>
+              </div>
 
-          <div className="conversation-window">
-            <MessageBubble role="user" content={activeTrace?.user_message ?? 'Send a message to create a trace.'} />
-            <MessageBubble
-              role="assistant"
-              content={activeTrace?.assistant_message ?? activeTrace?.error ?? 'Model output will appear here.'}
-              muted={!activeTrace?.assistant_message}
-            />
-          </div>
-
-          <form className="composer" onSubmit={handleSubmit}>
-            <textarea
-              value={message}
-              onChange={(event) => setMessage(event.target.value)}
-              onKeyDown={handleComposerKeyDown}
-              placeholder="Ask Peppa something..."
-              rows={4}
-            />
-            <button className="send-button" type="submit" disabled={isSending || !message.trim()}>
-              {isSending ? <RefreshCw className="spin" size={17} /> : <Send size={17} />}
-              <span>{isSending ? 'Sending' : 'Send'}</span>
-            </button>
-          </form>
-        </section>
-
-        <aside className="panel trace-list-panel" aria-label="Recent traces">
-          <div className="panel-header compact">
-            <div>
-              <h2>Recent Traces</h2>
-              <p>{traces.length} loaded</p>
-            </div>
-            <div className="trace-actions">
-              <label className="selection-toggle" title={selectionToggleLabel}>
-                <input
-                  type="checkbox"
-                  checked={isAllHistorySelected}
-                  disabled={selectableHistoryTraceIds.length === 0}
-                  aria-label={selectionToggleLabel}
-                  onChange={handleToggleHistorySelection}
+              <div className="conversation-window">
+                <MessageBubble
+                  role="user"
+                  content={activeTrace?.user_message ?? 'Send a message to create a trace.'}
                 />
-              </label>
-              <button
-                className="icon-button"
-                type="button"
-                onClick={() => void handleMemoryExtraction()}
-                disabled={selectedTraceCount === 0 || isExtractingMemory}
-              >
-                {isExtractingMemory ? <RefreshCw className="spin" size={16} /> : <Database size={16} />}
-                <span>{isExtractingMemory ? 'Extracting' : `Extract ${selectedTraceCount}`}</span>
-              </button>
-              <button className="icon-button" type="button" onClick={() => void refreshTraces()}>
-                <RefreshCw size={16} />
-                <span>Refresh</span>
-              </button>
-            </div>
-          </div>
-          <div className="trace-list">
-            <div className="trace-tabs" role="tablist" aria-label="Trace type">
-              <button
-                className={activeTraceTab === 'history' ? 'trace-tab active' : 'trace-tab'}
-                type="button"
-                role="tab"
-                aria-selected={activeTraceTab === 'history'}
-                onClick={() => setActiveTraceTab('history')}
-              >
-                History
-                <span>{historyTraces.length}</span>
-              </button>
-              <button
-                className={activeTraceTab === 'memory' ? 'trace-tab active' : 'trace-tab'}
-                type="button"
-                role="tab"
-                aria-selected={activeTraceTab === 'memory'}
-                onClick={() => setActiveTraceTab('memory')}
-              >
-                Memory Extraction
-                <span>{memoryExtractionTraces.length}</span>
-              </button>
-            </div>
+                <MessageBubble
+                  role="assistant"
+                  content={activeTrace?.assistant_message ?? activeTrace?.error ?? 'Model output will appear here.'}
+                  muted={!activeTrace?.assistant_message}
+                />
+              </div>
 
-            {visibleTraces.map((trace) => {
-              const isDisabled = isToolCallTrace(trace);
-              return (
-                <div className={isDisabled ? 'trace-item disabled' : 'trace-item'} key={trace.id}>
-                  <input
-                    type="checkbox"
-                    checked={selectedTraceIds.has(trace.id)}
-                    disabled={isDisabled}
-                    aria-label={`Select trace ${trace.id}`}
-                    onChange={(event) => handleTraceSelection(trace, event.currentTarget.checked)}
-                  />
+              <form className="composer" onSubmit={handleSubmit}>
+                <textarea
+                  value={message}
+                  onChange={(event) => setMessage(event.target.value)}
+                  onKeyDown={handleComposerKeyDown}
+                  placeholder="Ask Peppa something..."
+                  rows={4}
+                />
+                <button className="send-button" type="submit" disabled={isSending || !message.trim()}>
+                  {isSending ? <RefreshCw className="spin" size={17} /> : <Send size={17} />}
+                  <span>{isSending ? 'Sending' : 'Send'}</span>
+                </button>
+              </form>
+            </section>
+
+            <aside className="panel trace-list-panel" aria-label="Recent traces">
+              <div className="panel-header compact">
+                <div>
+                  <h2>Recent Traces</h2>
+                  <p>{traces.length} loaded</p>
+                </div>
+                <div className="trace-actions">
+                  <label className="selection-toggle" title={selectionToggleLabel}>
+                    <input
+                      type="checkbox"
+                      checked={isAllHistorySelected}
+                      disabled={selectableHistoryTraceIds.length === 0}
+                      aria-label={selectionToggleLabel}
+                      onChange={handleToggleHistorySelection}
+                    />
+                  </label>
                   <button
-                    className={trace.id === activeTrace?.id ? 'trace-row active' : 'trace-row'}
+                    className="icon-button"
                     type="button"
-                    onClick={() => setActiveTrace(trace)}
+                    onClick={() => void handleMemoryExtraction()}
+                    disabled={selectedTraceCount === 0 || isExtractingMemory}
                   >
-                    <span className="trace-model">{trace.model}</span>
-                    <span className="trace-message">{trace.user_message}</span>
-                    <span className={trace.error ? 'trace-state error' : 'trace-state'}>
-                      {trace.error ? 'error' : `${trace.duration_ms ?? 0} ms`}
-                    </span>
+                    {isExtractingMemory ? <RefreshCw className="spin" size={16} /> : <Database size={16} />}
+                    <span>{isExtractingMemory ? 'Extracting' : `Extract ${selectedTraceCount}`}</span>
+                  </button>
+                  <button className="icon-button" type="button" onClick={() => void refreshTraces()}>
+                    <RefreshCw size={16} />
+                    <span>Refresh</span>
                   </button>
                 </div>
-              );
-            })}
-            {visibleTraces.length === 0 && <div className="empty-state">No traces yet.</div>}
-          </div>
-        </aside>
-      </section>
+              </div>
+              <div className="trace-list">
+                <div className="trace-tabs" role="tablist" aria-label="Trace type">
+                  <button
+                    className={activeTraceTab === 'history' ? 'trace-tab active' : 'trace-tab'}
+                    type="button"
+                    role="tab"
+                    aria-selected={activeTraceTab === 'history'}
+                    onClick={() => setActiveTraceTab('history')}
+                  >
+                    History
+                    <span>{historyTraces.length}</span>
+                  </button>
+                  <button
+                    className={activeTraceTab === 'memory' ? 'trace-tab active' : 'trace-tab'}
+                    type="button"
+                    role="tab"
+                    aria-selected={activeTraceTab === 'memory'}
+                    onClick={() => setActiveTraceTab('memory')}
+                  >
+                    Memory Extraction
+                    <span>{memoryExtractionTraces.length}</span>
+                  </button>
+                </div>
 
-      <section className="debug-grid">
-        <JsonPanel
-          title="Prompt"
-          icon={<Bot size={16} />}
-          value={activeTrace?.prompt_messages ?? []}
-          onExpand={setExpandedJsonPanel}
-        />
-        <JsonPanel
-          title="Memory Hits"
-          icon={<Database size={16} />}
-          value={activeTrace?.memory_hits ?? []}
-          onExpand={setExpandedJsonPanel}
-        />
-        <JsonPanel
-          title="Request"
-          icon={<Braces size={16} />}
-          value={activeTrace?.request_payload ?? {}}
-          onExpand={setExpandedJsonPanel}
-        />
-        <JsonPanel
-          title="Response"
-          icon={<Braces size={16} />}
-          value={activeTrace?.response_payload ?? {}}
-          onExpand={setExpandedJsonPanel}
-        />
-      </section>
+                {visibleTraces.map((trace) => {
+                  const isDisabled = isToolCallTrace(trace);
+                  return (
+                    <div className={isDisabled ? 'trace-item disabled' : 'trace-item'} key={trace.id}>
+                      <input
+                        type="checkbox"
+                        checked={selectedTraceIds.has(trace.id)}
+                        disabled={isDisabled}
+                        aria-label={`Select trace ${trace.id}`}
+                        onChange={(event) => handleTraceSelection(trace, event.currentTarget.checked)}
+                      />
+                      <button
+                        className={trace.id === activeTrace?.id ? 'trace-row active' : 'trace-row'}
+                        type="button"
+                        onClick={() => setActiveTrace(trace)}
+                      >
+                        <span className="trace-model">{trace.model}</span>
+                        <span className="trace-message">{trace.user_message}</span>
+                        <span className={trace.error ? 'trace-state error' : 'trace-state'}>
+                          {trace.error ? 'error' : `${trace.duration_ms ?? 0} ms`}
+                        </span>
+                      </button>
+                    </div>
+                  );
+                })}
+                {visibleTraces.length === 0 && <div className="empty-state">No traces yet.</div>}
+              </div>
+            </aside>
+          </section>
 
-      {expandedJsonPanel && (
-        <JsonModal
-          title={expandedJsonPanel.title}
-          value={expandedJsonPanel.value}
-          onClose={() => setExpandedJsonPanel(null)}
-        />
+          <section className="debug-grid">
+            <JsonPanel
+              title="Prompt"
+              icon={<Bot size={16} />}
+              value={activeTrace?.prompt_messages ?? []}
+              onExpand={setExpandedJsonPanel}
+            />
+            <JsonPanel
+              title="Memory Hits"
+              icon={<Database size={16} />}
+              value={activeTrace?.memory_hits ?? []}
+              onExpand={setExpandedJsonPanel}
+            />
+            <JsonPanel
+              title="Request"
+              icon={<Braces size={16} />}
+              value={activeTrace?.request_payload ?? {}}
+              onExpand={setExpandedJsonPanel}
+            />
+            <JsonPanel
+              title="Response"
+              icon={<Braces size={16} />}
+              value={activeTrace?.response_payload ?? {}}
+              onExpand={setExpandedJsonPanel}
+            />
+          </section>
+
+          {expandedJsonPanel && (
+            <JsonModal
+              title={expandedJsonPanel.title}
+              value={expandedJsonPanel.value}
+              onClose={() => setExpandedJsonPanel(null)}
+            />
+          )}
+        </>
       )}
     </main>
   );

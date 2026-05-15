@@ -28,3 +28,54 @@ export type ChatResponse = {
   conversation_id: string;
   trace: TraceRecord;
 };
+
+export type MemoryGraphTag = {
+  id: string;
+  name: string;
+  kind: string;
+  confidence: number;
+  reason: string;
+  mention_count: number;
+};
+
+export type MemoryGraphNode = {
+  id: string;
+  type: string;
+  title: string;
+  summary: string;
+  confidence: number;
+  mention_count: number;
+  created_at: string;
+  updated_at: string;
+  tags: MemoryGraphTag[];
+  source_trace_ids: string[];
+};
+
+export type MemoryGraphEdge = {
+  id: string;
+  source_node_id: string;
+  source_title: string;
+  source_type: string;
+  target_node_id: string;
+  target_title: string;
+  target_type: string;
+  relation_type: string;
+  summary: string;
+  confidence: number;
+  mention_count: number;
+  created_at: string;
+  updated_at: string;
+  tags: MemoryGraphTag[];
+  source_trace_ids: string[];
+};
+
+export type MemoryGraphResponse = {
+  nodes: MemoryGraphNode[];
+  edges: MemoryGraphEdge[];
+  stats: {
+    nodes: number;
+    edges: number;
+    tags: number;
+    extraction_runs: number;
+  };
+};

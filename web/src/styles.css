@@ -217,6 +217,12 @@ h2 {
   background: #18202a;
 }
 
+.icon-button.active {
+  border-color: #407266;
+  background: #12201f;
+  color: #dffbf4;
+}
+
 .icon-button:disabled,
 .send-button:disabled {
   cursor: not-allowed;
@@ -532,6 +538,221 @@ pre {
   font-size: 13px;
 }
 
+.memory-page {
+  display: grid;
+  gap: 16px;
+}
+
+.memory-page-header,
+.memory-page-actions,
+.memory-stats,
+.memory-stat,
+.memory-type-row {
+  display: flex;
+  align-items: center;
+}
+
+.memory-page-header {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.memory-page-header h2 {
+  font-size: 18px;
+}
+
+.memory-page-header p,
+.memory-muted {
+  margin-top: 4px;
+  color: #8c95a5;
+  font-size: 12px;
+}
+
+.memory-page-actions {
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.memory-error {
+  padding: 10px 12px;
+  border: 1px solid #703336;
+  border-radius: 8px;
+  color: #ffb6b6;
+  background: #251719;
+  font-size: 13px;
+}
+
+.memory-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.memory-stat {
+  gap: 9px;
+  min-height: 54px;
+  padding: 0 14px;
+  border: 1px solid #252b36;
+  border-radius: 8px;
+  background: #151922;
+  color: #8c95a5;
+  font-size: 12px;
+}
+
+.memory-stat svg {
+  color: #8ed7c6;
+}
+
+.memory-stat strong {
+  margin-left: auto;
+  color: #eff3f8;
+  font-size: 20px;
+}
+
+.memory-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 16px;
+  min-height: 660px;
+}
+
+.memory-graph-panel {
+  position: relative;
+  min-height: 660px;
+  overflow: hidden;
+}
+
+.memory-graph-canvas {
+  width: 100%;
+  height: 100%;
+  min-height: 660px;
+  background: #10141b;
+}
+
+.memory-empty-state {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  color: #8c95a5;
+  text-align: center;
+  font-size: 13px;
+  pointer-events: none;
+}
+
+.memory-inspector {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+  padding: 14px;
+  overflow: auto;
+}
+
+.memory-inspector h3 {
+  margin: 0 0 10px;
+  color: #dbe1ea;
+  font-size: 13px;
+}
+
+.memory-type-list {
+  display: grid;
+  gap: 8px;
+}
+
+.memory-type-row {
+  gap: 8px;
+  min-height: 30px;
+  color: #cbd3df;
+  font-size: 12px;
+}
+
+.memory-type-row strong {
+  margin-left: auto;
+  color: #8ed7c6;
+}
+
+.memory-type-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.memory-tag-list,
+.memory-tooltip-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.memory-tag,
+.memory-tooltip-tags span {
+  max-width: 100%;
+  padding: 4px 7px;
+  border: 1px solid #2f3a49;
+  border-radius: 8px;
+  color: #cfe8e2;
+  background: #10201e;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.memory-selection {
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid #252b36;
+  border-radius: 8px;
+  background: #10141b;
+}
+
+.memory-selection-kicker,
+.memory-tooltip-kicker {
+  color: #8ed7c6;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.memory-selection h4 {
+  margin: 0;
+  color: #eff3f8;
+  font-size: 15px;
+}
+
+.memory-selection p {
+  color: #c9d2df;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.memory-selection small {
+  color: #8c95a5;
+  font-size: 11px;
+}
+
+.memory-tooltip-card {
+  display: grid;
+  gap: 8px;
+  width: min(320px, 70vw);
+  padding: 10px;
+  border: 1px solid #344155;
+  border-radius: 8px;
+  background: #10141b;
+  color: #e7eaf0;
+  box-shadow: 0 14px 36px rgb(0 0 0 / 38%);
+}
+
+.memory-tooltip-card strong {
+  font-size: 13px;
+}
+
+.memory-tooltip-card p {
+  color: #c9d2df;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .spin {
   animation: spin 0.9s linear infinite;
 }
@@ -544,8 +765,13 @@ pre {
 
 @media (max-width: 1040px) {
   .console-grid,
-  .debug-grid {
+  .debug-grid,
+  .memory-layout {
     grid-template-columns: 1fr;
+  }
+
+  .memory-inspector {
+    max-height: none;
   }
 
   .trace-list {
@@ -592,5 +818,20 @@ pre {
 
   .trace-actions .icon-button {
     flex: 1;
+  }
+
+  .memory-page-header,
+  .memory-page-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .memory-stats {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .memory-graph-panel,
+  .memory-graph-canvas {
+    min-height: 520px;
   }
 }

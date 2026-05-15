@@ -1,4 +1,4 @@
-import type { ChatResponse, PublicConfig, TraceRecord } from './types';
+import type { ChatResponse, MemoryGraphResponse, PublicConfig, TraceRecord } from './types';
 
 async function requestJson<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -23,6 +23,10 @@ export function fetchConfig(): Promise<PublicConfig> {
 
 export function fetchTraces(): Promise<{ traces: TraceRecord[] }> {
   return requestJson<{ traces: TraceRecord[] }>('/api/traces?limit=25');
+}
+
+export function fetchMemoryGraph(): Promise<MemoryGraphResponse> {
+  return requestJson<MemoryGraphResponse>('/api/memory/graph');
 }
 
 export function sendChat(params: {

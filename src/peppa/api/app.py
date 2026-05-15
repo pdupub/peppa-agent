@@ -103,6 +103,10 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Trace not found.")
         return record.public_dict()
 
+    @app.get("/api/memory/graph")
+    async def memory_graph() -> dict[str, Any]:
+        return memory_graph_store.get_memory_graph()
+
     @app.post("/api/memory/extract", response_model=MemoryExtractionResponse)
     async def extract_memory(request: MemoryExtractionRequest) -> MemoryExtractionResponse:
         try:

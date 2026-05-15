@@ -311,6 +311,144 @@ class MemoryGraphStore:
             )
         return run_id
 
+    def get_memory_graph(self) -> dict[str, Any]:
+        with self._connect() as connection:
+            nodes = [
+                dict(row)
+                for row in connection.execute(
+                    """
+                    SELECT
+                        id,
+                        type,
+                        title,
+                        summary,
+                        confidence,
+                        mention_count,
+                        created_at,
+                        updated_at
+                    FROM memory_nodes
+                    WHERE status = 'active'
+                    ORDER BY mention_count DESC, updated_at DESC, title ASC
+                    """
+                ).fetchall()
+            ]
+            edges = [
+                dict(row)
+                for row in connection.execute(
+                    """
+                    SELECT
+                        edge.id,
+                        edge.source_node_id,
+                        source.title AS source_title,
+                        source.type AS source_type,
+                        edge.target_node_id,
+                        target.title AS target_title,
+                        target.type AS target_type,
+                        edge.relation_type,
+                        edge.summary,
+                        edge.confidence,
+                        edge.mention_count,
+                        edge.created_at,
+                        edge.updated_at
+                    FROM memory_edges AS edge
+                    JOIN memory_nodes AS source
+                        ON source.id = edge.source_node_id
+                    JOIN memory_nodes AS target
+                        ON target.id = edge.target_node_id
+                    WHERE edge.status = 'active'
+                    ORDER BY edge.mention_count DESC, edge.updated_at DESC, edge.relation_type ASC
+                    """
+                ).fetchall()
+            ]
+
+            node_tags = _group_tags(
+                connection.execute(
+                    """
+                    SELECT
+                        link.node_id AS owner_id,
+                        tag.id,
+                        tag.name,
+                        tag.kind,
+                        link.confidence,
+                        link.reason,
+                        link.mention_count
+                    FROM memory_node_tags AS link
+                    JOIN memory_tags AS tag
+                        ON tag.id = link.tag_id
+                    ORDER BY tag.name ASC
+                    """
+                ).fetchall()
+            )
+            edge_tags = _group_tags(
+                connection.execute(
+                    """
+                    SELECT
+                        link.edge_id AS owner_id,
+                        tag.id,
+                        tag.name,
+                        tag.kind,
+                        link.confidence,
+                        link.reason,
+                        link.mention_count
+                    FROM memory_edge_tags AS link
+                    JOIN memory_tags AS tag
+                        ON tag.id = link.tag_id
+                    ORDER BY tag.name ASC
+                    """
+                ).fetchall()
+            )
+            node_sources = _group_source_trace_ids(
+                connection.execute(
+                    """
+                    SELECT resolved_node_id AS owner_id, source_trace_id
+                    FROM memory_node_observations
+                    WHERE resolved_node_id IS NOT NULL
+                        AND source_trace_id IS NOT NULL
+                    """
+                ).fetchall()
+            )
+            edge_sources = _group_source_trace_ids(
+                connection.execute(
+                    """
+                    SELECT resolved_edge_id AS owner_id, source_trace_id
+                    FROM memory_edge_observations
+                    WHERE resolved_edge_id IS NOT NULL
+                        AND source_trace_id IS NOT NULL
+                    """
+                ).fetchall()
+            )
+            stats = dict(
+                connection.execute(
+                    """
+                    SELECT
+                        (SELECT COUNT(*) FROM memory_nodes WHERE status = 'active') AS nodes,
+                        (SELECT COUNT(*) FROM memory_edges WHERE status = 'active') AS edges,
+                        (SELECT COUNT(*) FROM memory_tags) AS tags,
+                        (SELECT COUNT(*) FROM memory_extraction_runs) AS extraction_runs
+                    """
+                ).fetchone()
+            )
+
+        return {
+            "nodes": [
+                {
+                    **node,
+                    "tags": node_tags.get(node["id"], []),
+                    "source_trace_ids": node_sources.get(node["id"], []),
+                }
+                for node in nodes
+            ],
+            "edges": [
+                {
+                    **edge,
+                    "tags": edge_tags.get(edge["id"], []),
+                    "source_trace_ids": edge_sources.get(edge["id"], []),
+                }
+                for edge in edges
+            ],
+            "stats": stats,
+        }
+
     def _record_failed_run(
         self,
         *,
@@ -1044,6 +1182,32 @@ def _parse_arguments(raw_arguments: Any) -> dict[str, Any]:
         if isinstance(parsed, dict):
             return parsed
     raise ValueError("Tool call arguments must be a JSON object.")
+
+
+def _group_tags(rows: list[sqlite3.Row]) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        owner_id = row["owner_id"]
+        grouped.setdefault(owner_id, []).append(
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "kind": row["kind"],
+                "confidence": row["confidence"],
+                "reason": row["reason"],
+                "mention_count": row["mention_count"],
+            }
+        )
+    return grouped
+
+
+def _group_source_trace_ids(rows: list[sqlite3.Row]) -> dict[str, list[str]]:
+    grouped: dict[str, set[str]] = {}
+    for row in rows:
+        owner_id = row["owner_id"]
+        source_trace_id = row["source_trace_id"]
+        grouped.setdefault(owner_id, set()).add(source_trace_id)
+    return {owner_id: sorted(source_ids) for owner_id, source_ids in grouped.items()}
 
 
 def _as_record(value: Any) -> dict[str, Any]:
