@@ -120,6 +120,8 @@ edge: 骑马 located_in 草地
 tag: 骑马, 户外, 运动
 ```
 
+如果出现**用户**这个node必须用**我**这个node替代。
+
 ## Edge 规则
 
 edge 表示 node 之间的关系。两个 node 之间可以有多条 edge，因为它们可能存在多种关系。
