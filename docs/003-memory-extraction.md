@@ -53,6 +53,7 @@
 
 - `deepseek`：保持标准 OpenAI-compatible tool call 格式
 - `qwen`：携带 tools 时添加 `enable_thinking = false`
+- `qwen`：如果 tool call arguments 出现 provider 特有的多重引号转义或缺失 JSON 值，会在 qwen adapter 内做一次轻量修复，再解析成统一 tool call
 - `kimi`：为 function tool 添加 `strict = false`，`kimi-k2.6` 携带 tools 时添加 `thinking = { type = "disabled" }`
 
 这个 adapter 是通用模型能力，不包含 memory schema。未来如果其他功能需要 tool call，应复用同一层适配，只替换自己的 tool schema 和业务处理逻辑。

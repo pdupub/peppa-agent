@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any
 import json
+import re
+from typing import Any, Callable
 
 from peppa.config import ModelSettings
 from peppa.models.tool_calls.types import ToolCall
@@ -71,6 +72,12 @@ class QwenToolAdapter(OpenAICompatibleToolAdapter):
     ) -> None:
         if has_tools:
             payload["enable_thinking"] = False
+
+    def parse_response_tool_calls(self, payload: dict[str, Any]) -> list[ToolCall]:
+        return _parse_openai_style_tool_calls(
+            payload,
+            parse_arguments=_parse_qwen_arguments,
+        )
 
 
 class KimiToolAdapter(OpenAICompatibleToolAdapter):
@@ -165,7 +172,11 @@ def _detect_adapter_name(model_settings: ModelSettings) -> str:
     return "openai"
 
 
-def _parse_openai_style_tool_calls(payload: dict[str, Any]) -> list[ToolCall]:
+def _parse_openai_style_tool_calls(
+    payload: dict[str, Any],
+    parse_arguments: Callable[[Any], dict[str, Any]] | None = None,
+) -> list[ToolCall]:
+    argument_parser = parse_arguments or _parse_arguments
     choices = payload.get("choices")
     if not isinstance(choices, list):
         return []
@@ -175,13 +186,19 @@ def _parse_openai_style_tool_calls(payload: dict[str, Any]) -> list[ToolCall]:
         choice_record = _as_record(choice)
         message = _as_record(choice_record.get("message"))
         for tool_call in _as_list(message.get("tool_calls")):
-            parsed = _parse_openai_style_tool_call(tool_call)
+            parsed = _parse_openai_style_tool_call(
+                tool_call,
+                parse_arguments=argument_parser,
+            )
             if parsed is not None:
                 tool_calls.append(parsed)
     return tool_calls
 
 
-def _parse_openai_style_tool_call(tool_call: Any) -> ToolCall | None:
+def _parse_openai_style_tool_call(
+    tool_call: Any,
+    parse_arguments: Callable[[Any], dict[str, Any]],
+) -> ToolCall | None:
     tool_record = _as_record(tool_call)
     function = _as_record(tool_record.get("function"))
     name = _clean_text(function.get("name") or tool_record.get("name"))
@@ -195,7 +212,7 @@ def _parse_openai_style_tool_call(tool_call: Any) -> ToolCall | None:
     parsed_arguments: dict[str, Any] | None = None
     parse_error: str | None = None
     try:
-        parsed_arguments = _parse_arguments(raw_arguments)
+        parsed_arguments = parse_arguments(raw_arguments)
     except ValueError as exc:
         parse_error = str(exc)
 
@@ -221,6 +238,129 @@ def _parse_arguments(raw_arguments: Any) -> dict[str, Any]:
         if isinstance(parsed, dict):
             return parsed
     raise ValueError("Tool call arguments must be a JSON object.")
+
+
+def _parse_qwen_arguments(raw_arguments: Any) -> dict[str, Any]:
+    if isinstance(raw_arguments, dict):
+        return _decode_nested_json_strings(raw_arguments)
+    if not isinstance(raw_arguments, str):
+        raise ValueError("Tool call arguments must be a JSON object.")
+
+    if not raw_arguments.strip():
+        raise ValueError("Tool call arguments are empty.")
+
+    last_error: json.JSONDecodeError | None = None
+    for candidate in _qwen_argument_candidates(raw_arguments):
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            last_error = exc
+            continue
+        if isinstance(parsed, dict):
+            return _decode_nested_json_strings(parsed)
+
+    if last_error is not None:
+        raise ValueError(
+            f"Tool call arguments are not valid JSON after qwen repair: {last_error}"
+        ) from last_error
+    raise ValueError("Tool call arguments must be a JSON object.")
+
+
+def _qwen_argument_candidates(raw_arguments: str) -> list[str]:
+    original = raw_arguments.strip()
+    repaired = _fill_missing_json_values(_collapse_extra_quote_escapes(original))
+    if repaired == original:
+        return [original]
+    return [original, repaired]
+
+
+def _collapse_extra_quote_escapes(value: str) -> str:
+    return re.sub(r'\\{2,}(?=")', r"\\", value)
+
+
+def _fill_missing_json_values(value: str) -> str:
+    result: list[str] = []
+    in_string = False
+    escape = False
+    index = 0
+
+    while index < len(value):
+        char = value[index]
+        result.append(char)
+
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+
+        if char == '"':
+            in_string = True
+            index += 1
+            continue
+
+        if char == ":":
+            lookahead = index + 1
+            while lookahead < len(value) and value[lookahead].isspace():
+                result.append(value[lookahead])
+                lookahead += 1
+            if lookahead < len(value) and value[lookahead] in ",}":
+                result.append("{}")
+            index = lookahead
+            continue
+
+        index += 1
+
+    return "".join(result)
+
+
+def _decode_nested_json_strings(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _decode_nested_json_strings(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_decode_nested_json_strings(item) for item in value]
+    if isinstance(value, str):
+        parsed = _parse_nested_json_string(value)
+        if parsed is not None:
+            return _decode_nested_json_strings(parsed)
+    return value
+
+
+def _parse_nested_json_string(value: str) -> Any | None:
+    current = value.strip()
+    if not current.startswith(("[", "{")):
+        return None
+
+    for _ in range(3):
+        try:
+            return json.loads(current)
+        except json.JSONDecodeError:
+            decoded = _decode_json_string_layer(current)
+            if decoded == current:
+                current = _remove_quote_escapes(current)
+            else:
+                current = decoded
+
+    try:
+        return json.loads(current)
+    except json.JSONDecodeError:
+        return None
+
+
+def _decode_json_string_layer(value: str) -> str:
+    try:
+        decoded = json.loads(f'"{value}"')
+    except json.JSONDecodeError:
+        return value
+    return decoded if isinstance(decoded, str) else value
+
+
+def _remove_quote_escapes(value: str) -> str:
+    return re.sub(r'\\+(?=")', "", value)
 
 
 def _is_kimi_thinking_model(model: str) -> bool:

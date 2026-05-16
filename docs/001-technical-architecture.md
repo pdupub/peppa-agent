@@ -198,7 +198,7 @@ Peppa 只调用 OpenAI-compatible 的外部模型 API。不同模型可以有不
 当前 provider 差异：
 
 - DeepSeek：使用标准 OpenAI-compatible `tools` / `tool_choice` / `message.tool_calls`
-- Qwen：tool-call 请求默认关闭 thinking，避免结构化参数受思考模式干扰
+- Qwen：tool-call 请求默认关闭 thinking，避免结构化参数受思考模式干扰；如果返回的 arguments 存在多重引号转义或缺失 JSON 值，会在 qwen adapter 内做轻量修复
 - Kimi：tool schema 默认设置 `strict = false`，`kimi-k2.6` 的 tool-call 请求默认关闭 thinking
 
 adapter 不硬编码 memory schema。记忆抽取、工具执行或未来其他功能都可以传入自己的 tool schema，并复用同一套 provider 适配和返回解析。
