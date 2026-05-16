@@ -266,11 +266,16 @@ def create_app() -> FastAPI:
                     status_code=400,
                     detail=f"Memory extraction traces cannot be used as input: {trace_id}",
                 )
-            selected_traces.append(record)
+        selected_traces.append(record)
 
         selected_traces.sort(key=lambda item: item.created_at)
+        current_identity = identity_store.get_or_create_identity(
+            channel=WEB_IDENTITY_CHANNEL,
+            channel_instance=WEB_IDENTITY_INSTANCE,
+        )
         prompt_messages = _build_memory_extraction_messages(
-            [trace.public_dict() for trace in selected_traces]
+            source_traces=[trace.public_dict() for trace in selected_traces],
+            current_user_identity=current_identity.current_user_identity,
         )
         tools = memory_graph_update_tools()
         tool_choice = memory_tool_choice()
@@ -286,6 +291,8 @@ def create_app() -> FastAPI:
             "kind": "memory_extraction",
             "source_trace_ids": request.trace_ids,
             "source_trace_order": [trace.id for trace in selected_traces],
+            "current_user_identity": current_identity.current_user_identity,
+            "current_user_memory_node_id": current_identity.memory_node_id,
         }
 
         response_payload: dict[str, Any] | None = None
@@ -402,7 +409,11 @@ def _build_identity_extraction_messages(
     ]
 
 
-def _build_memory_extraction_messages(source_traces: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _build_memory_extraction_messages(
+    *,
+    source_traces: list[dict[str, Any]],
+    current_user_identity: str,
+) -> list[dict[str, Any]]:
     context_blocks = []
     for index, trace in enumerate(source_traces, start=1):
         assistant_text = trace.get("assistant_message") or trace.get("error") or ""
@@ -421,13 +432,20 @@ def _build_memory_extraction_messages(source_traces: list[dict[str, Any]]) -> li
     return [
         {
             "role": "system",
-            "content": load_skill("memory-extraction/SKILL.md"),
+            "content": _render_identity_template(
+                load_skill("memory-extraction/SKILL.md"),
+                current_user_identity=current_user_identity,
+            ),
         },
         {
             "role": "user",
             "content": "以下是按时间顺序排列的对话内容：\n\n" + "\n\n".join(context_blocks),
         },
     ]
+
+
+def _render_identity_template(content: str, *, current_user_identity: str) -> str:
+    return content.replace("{{current_user_identity}}", current_user_identity)
 
 
 def _is_tool_call_trace(trace: dict[str, Any]) -> bool:

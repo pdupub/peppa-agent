@@ -33,7 +33,7 @@ document 保持工程化和精确内容
 
 输入上下文中的每一轮都会包含 `trace_id`。当你输出 `segments`、`memory_graph.nodes`、`memory_graph.edges`、`document_suggestions` 时，必须填写 `source_trace_id`，且只能使用输入中真实出现的 `trace_id`，不能编造。
 
-会话中用户所说的“我”和“用户”指向同一个身份，都表示正在与 Peppa 对话的用户。
+会话中用户所说的“我”和“用户”或者{{current_user_identity}}都表示正在与 Peppa 对话的同一个身份。
 
 ## 内容去向
 
@@ -120,7 +120,7 @@ edge: 骑马 located_in 草地
 tag: 骑马, 户外, 运动
 ```
 
-如果出现**用户**这个node必须用**我**这个node替代。
+如果出现**用户**或者**我**这个node必须用**{{current_user_identity}}**这个node替代。
 
 ## Edge 规则
 

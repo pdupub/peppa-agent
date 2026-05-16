@@ -24,7 +24,7 @@
 - 使用当前选择的模型
 - 使用当前模型对应的 temperature
 - 调用 `/api/memory/extract`
-- 加载 `skills/memory-extraction/SKILL.md` 作为 system 内容
+- 加载 `skills/memory-extraction/SKILL.md` 作为 system 内容，并用当前 conversation identity 替换 `{{current_user_identity}}`
 - 使用 `tool_choice = "auto"`，让模型优先通过 `record_memory_graph_update` 返回结构化结果
 - 通过模型配置中的 `tool_adapter` 生成实际请求，并解析 provider 返回的 tool calls
 - 将原始 request 和 response 保存为一条新的 trace
