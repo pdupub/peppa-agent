@@ -172,7 +172,7 @@ h2 {
 
 .console-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 460px;
+  grid-template-columns: minmax(0, 1fr) 560px;
   gap: 16px;
   min-height: 460px;
 }
