@@ -8,7 +8,7 @@ import uvicorn
 
 from peppa.config import ConfigError, load_settings
 from peppa.core import Agent
-from peppa.memory import Storage
+from peppa.memory import MemoryGraphStore, Storage
 from peppa.paths import (
     CONFIG_EXAMPLE_PATH,
     CONFIG_PATH,
@@ -61,6 +61,28 @@ def reset_agent() -> None:
     ensure_runtime_dirs()
     Storage().initialize()
     typer.echo(f"Reset agent state and initialized database: {DATABASE_PATH}")
+
+
+@app.command()
+def reset_memory(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation."),
+) -> None:
+    """Reset extracted memory while keeping conversations, messages, and traces."""
+    ensure_runtime_dirs()
+    Storage().initialize()
+
+    if not yes:
+        confirmed = typer.confirm(
+            f"This will delete Peppa's extracted memory graph and memory extraction "
+            f"records at {DATABASE_PATH}, while keeping conversations, messages, "
+            f"and traces. Continue?"
+        )
+        if not confirmed:
+            typer.echo("Reset cancelled. Existing memory was kept.")
+            return
+
+    MemoryGraphStore().reset_memory()
+    typer.echo(f"Reset memory state while keeping conversation records: {DATABASE_PATH}")
 
 
 @app.command()

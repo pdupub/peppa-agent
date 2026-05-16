@@ -39,4 +39,10 @@ Reset local agent state when needed:
 ```bash
 peppa reset-agent
 ```
+
+Reset extracted memory only, while keeping conversations and traces:
+
+```bash
+peppa reset-memory
+```
 AI Agent from Matrix

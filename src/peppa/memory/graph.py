@@ -212,6 +212,21 @@ def ensure_memory_graph_schema(connection: sqlite3.Connection) -> None:
     )
 
 
+MEMORY_TABLE_DELETE_ORDER = (
+    "memory_edge_tags",
+    "memory_node_tags",
+    "memory_document_suggestions",
+    "memory_edge_observations",
+    "memory_node_observations",
+    "memory_tag_observations",
+    "memory_segments",
+    "memory_extraction_runs",
+    "memory_edges",
+    "memory_nodes",
+    "memory_tags",
+)
+
+
 class MemoryGraphStore:
     def __init__(self, database_path: Path = DATABASE_PATH) -> None:
         self.database_path = database_path
@@ -219,6 +234,12 @@ class MemoryGraphStore:
     def initialize(self) -> None:
         with self._connect() as connection:
             ensure_memory_graph_schema(connection)
+
+    def reset_memory(self) -> None:
+        with self._connect() as connection:
+            ensure_memory_graph_schema(connection)
+            for table_name in MEMORY_TABLE_DELETE_ORDER:
+                connection.execute(f"DELETE FROM {table_name}")
 
     def record_tool_calls(
         self,
