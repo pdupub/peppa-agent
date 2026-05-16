@@ -103,7 +103,7 @@ peppa serve
 
 `peppa serve` 和 `peppa chat` 会在需要时自动创建数据库和表结构。`peppa reset-agent` 用于重置 Peppa 的长期状态：如果数据库不存在，会直接创建；如果数据库已存在，会先在命令行要求确认。
 
-`peppa reset-memory` 只清除数据库中的记忆图、记忆抽取记录和相关 observation，不删除 conversations、messages 或 traces。它用于记忆抽取测试时重新生成记忆，同时保留原始会话记录。
+`peppa reset-memory` 只清除数据库中的记忆图、记忆抽取记录和相关 observation，不删除 conversations、messages 或 traces。它用于记忆抽取测试时重新生成记忆，同时保留原始会话记录。由于当前对话身份通过 memory node 关联，执行后 conversation identity 会回到默认的 `用户`。
 
 启动服务后访问：
 

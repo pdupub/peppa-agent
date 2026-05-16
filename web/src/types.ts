@@ -29,6 +29,30 @@ export type ChatResponse = {
   trace: TraceRecord;
 };
 
+export type ConversationIdentity = {
+  id: string;
+  channel: string;
+  channel_instance: string;
+  memory_node_id: string | null;
+  current_user_identity: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type IdentityCandidateNode = {
+  id: string;
+  title: string;
+  summary: string;
+  confidence: number;
+  mention_count: number;
+  updated_at: string;
+};
+
+export type IdentityContextResponse = {
+  identity: ConversationIdentity;
+  candidates: IdentityCandidateNode[];
+};
+
 export type MemoryGraphTag = {
   id: string;
   name: string;

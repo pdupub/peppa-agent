@@ -11,11 +11,19 @@ import {
   RefreshCw,
   Send,
   Settings2,
-  Sparkles
+  Sparkles,
+  UserRound
 } from 'lucide-react';
-import { extractMemory, fetchConfig, fetchTraces, sendChat } from './api';
+import {
+  extractIdentity,
+  extractMemory,
+  fetchConfig,
+  fetchIdentityContext,
+  fetchTraces,
+  sendChat
+} from './api';
 import { MemoryGraphPage } from './MemoryGraphPage';
-import type { PublicConfig, TraceRecord } from './types';
+import type { IdentityContextResponse, PublicConfig, TraceRecord } from './types';
 import './styles.css';
 
 const DEFAULT_TEMPERATURE = 1;
@@ -32,6 +40,7 @@ function initialRoute(): AppRoute {
 function App() {
   const [route, setRoute] = useState<AppRoute>(initialRoute);
   const [config, setConfig] = useState<PublicConfig | null>(null);
+  const [identityContext, setIdentityContext] = useState<IdentityContextResponse | null>(null);
   const [selectedModel, setSelectedModel] = useState('');
   const [temperatureByModel, setTemperatureByModel] = useState<Record<string, number>>(
     loadStoredTemperatures
@@ -43,6 +52,7 @@ function App() {
   const [selectedTraceIds, setSelectedTraceIds] = useState<Set<string>>(() => new Set());
   const [activeTraceTab, setActiveTraceTab] = useState<TraceTab>('history');
   const [isSending, setIsSending] = useState(false);
+  const [isIdentifying, setIsIdentifying] = useState(false);
   const [isExtractingMemory, setIsExtractingMemory] = useState(false);
   const [expandedJsonPanel, setExpandedJsonPanel] = useState<{
     title: string;
@@ -65,8 +75,13 @@ function App() {
 
   async function loadInitialData() {
     try {
-      const [nextConfig, nextTraces] = await Promise.all([fetchConfig(), fetchTraces()]);
+      const [nextConfig, nextTraces, nextIdentityContext] = await Promise.all([
+        fetchConfig(),
+        fetchTraces(),
+        fetchIdentityContext()
+      ]);
       setConfig(nextConfig);
+      setIdentityContext(nextIdentityContext);
       setSelectedModel(nextConfig.default_model);
       applyTraces(nextTraces.traces);
       setActiveTrace(nextTraces.traces[0] ?? null);
@@ -195,6 +210,41 @@ function App() {
     }
   }
 
+  async function handleIdentityExtraction() {
+    const selectedTraces = traces
+      .filter((trace) => selectedTraceIds.has(trace.id) && !isToolCallTrace(trace))
+      .sort((left, right) => left.created_at.localeCompare(right.created_at));
+
+    if (selectedTraces.length === 0 || !selectedModel || isIdentifying) {
+      return;
+    }
+
+    setIsIdentifying(true);
+    setError(null);
+    try {
+      const result = await extractIdentity({
+        traceIds: selectedTraces.map((trace) => trace.id),
+        model: selectedModel,
+        temperature: selectedTemperature
+      });
+      setIdentityContext((current) => ({
+        identity: result.identity,
+        candidates: current?.candidates ?? []
+      }));
+      setActiveTrace(result.trace);
+      const [nextTraces, nextIdentityContext] = await Promise.all([
+        fetchTraces(),
+        fetchIdentityContext()
+      ]);
+      setIdentityContext(nextIdentityContext);
+      applyTraces(nextTraces.traces);
+    } catch (identityError) {
+      setError(identityError instanceof Error ? identityError.message : 'Identity update failed.');
+    } finally {
+      setIsIdentifying(false);
+    }
+  }
+
   const activeModel = useMemo(
     () => config?.models.find((model) => model.model === selectedModel),
     [config, selectedModel]
@@ -213,6 +263,7 @@ function App() {
     [historyTraces]
   );
   const selectedTemperature = temperatureByModel[selectedModel] ?? DEFAULT_TEMPERATURE;
+  const currentUserIdentity = identityContext?.identity.current_user_identity ?? '用户';
   const selectedTraceCount = selectedTraceIds.size;
   const isAllHistorySelected =
     selectableHistoryTraceIds.length > 0 &&
@@ -285,6 +336,7 @@ function App() {
               aria-label="Temperature"
             />
           </label>
+          <StatusPill icon={<UserRound size={14} />} label="Talking to" value={currentUserIdentity} />
           <StatusPill icon={<Activity size={14} />} label="Runtime" value="Running" />
           <StatusPill icon={<Database size={14} />} label="SQLite" value="state" />
         </div>
@@ -357,6 +409,15 @@ function App() {
                       onChange={handleToggleHistorySelection}
                     />
                   </label>
+                  <button
+                    className="icon-button"
+                    type="button"
+                    onClick={() => void handleIdentityExtraction()}
+                    disabled={selectedTraceCount === 0 || isIdentifying}
+                  >
+                    {isIdentifying ? <RefreshCw className="spin" size={16} /> : <UserRound size={16} />}
+                    <span>{isIdentifying ? 'Identifying' : `Identify ${selectedTraceCount}`}</span>
+                  </button>
                   <button
                     className="icon-button"
                     type="button"
@@ -601,6 +662,11 @@ function isMemoryExtractionTrace(trace: TraceRecord): boolean {
 
 function isToolCallTrace(trace: TraceRecord): boolean {
   if (isMemoryExtractionTrace(trace)) {
+    return true;
+  }
+
+  const requestMeta = getRecord(trace.request_payload._peppa);
+  if (requestMeta?.kind === 'identity_update') {
     return true;
   }
 

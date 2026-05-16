@@ -9,6 +9,7 @@ import re
 import sqlite3
 import uuid
 
+from peppa.identity import ensure_identity_schema
 from peppa.memory.tool_schema import (
     DOCUMENT_TYPES,
     EDGE_RELATION_TYPES,
@@ -238,6 +239,16 @@ class MemoryGraphStore:
     def reset_memory(self) -> None:
         with self._connect() as connection:
             ensure_memory_graph_schema(connection)
+            ensure_identity_schema(connection)
+            connection.execute(
+                """
+                UPDATE conversation_context_identities
+                SET memory_node_id = NULL,
+                    updated_at = ?
+                WHERE memory_node_id IS NOT NULL
+                """,
+                (_now(),),
+            )
             for table_name in MEMORY_TABLE_DELETE_ORDER:
                 connection.execute(f"DELETE FROM {table_name}")
 

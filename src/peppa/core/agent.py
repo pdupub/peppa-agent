@@ -5,6 +5,7 @@ from time import perf_counter
 from typing import Any
 
 from peppa.config import PeppaSettings
+from peppa.identity import ConversationIdentityStore
 from peppa.memory import Storage, TraceRecord
 from peppa.models import ModelClient
 from peppa.prompts import load_prompt
@@ -32,10 +33,12 @@ class Agent:
         settings: PeppaSettings,
         storage: Storage,
         model_client: ModelClient | None = None,
+        identity_store: ConversationIdentityStore | None = None,
     ) -> None:
         self.settings = settings
         self.storage = storage
         self.model_client = model_client or ModelClient()
+        self.identity_store = identity_store or ConversationIdentityStore()
 
     async def chat(
         self,
@@ -44,6 +47,8 @@ class Agent:
         requested_model: str | None = None,
         conversation_id: str | None = None,
         temperature: float = 1.0,
+        channel: str = "cli",
+        channel_instance: str = "default",
     ) -> ChatResult:
         clean_message = user_message.strip()
         if not clean_message:
@@ -60,8 +65,15 @@ class Agent:
         )
 
         memory_hits: list[dict[str, Any]] = []
+        identity = self.identity_store.get_or_create_identity(
+            channel=channel,
+            channel_instance=channel_instance,
+        )
         prompt_messages = [
-            {"role": "system", "content": load_prompt(SYSTEM_PROMPT_PATH)},
+            {
+                "role": "system",
+                "content": _render_system_prompt(identity.current_user_identity),
+            },
             {"role": "user", "content": clean_message},
         ]
 
@@ -108,3 +120,10 @@ class Agent:
         )
 
         return ChatResult(conversation_id=conversation_id, trace=trace)
+
+
+def _render_system_prompt(current_user_identity: str) -> str:
+    return load_prompt(SYSTEM_PROMPT_PATH).replace(
+        "{{current_user_identity}}",
+        current_user_identity,
+    )

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from time import perf_counter
 from typing import Any
+import json
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,6 +14,12 @@ from pydantic import BaseModel, Field
 from peppa import __version__
 from peppa.config import ConfigError, load_settings
 from peppa.core import Agent
+from peppa.identity import (
+    IDENTITY_TOOL_NAME,
+    ConversationIdentityStore,
+    identity_tool_choice,
+    identity_update_tools,
+)
 from peppa.memory import MemoryGraphStore, Storage, memory_graph_update_tools, memory_tool_choice
 from peppa.models import ModelClient
 from peppa.paths import DATABASE_PATH, ROOT_DIR, WEB_DIST_DIR, ensure_runtime_dirs
@@ -41,11 +48,28 @@ class MemoryExtractionResponse(BaseModel):
     trace: dict[str, Any]
 
 
+class IdentityExtractionRequest(BaseModel):
+    trace_ids: list[str] = Field(min_length=1, max_length=20)
+    model: str | None = None
+    temperature: float = Field(default=1.0, ge=0.0, le=2.0)
+
+
+class IdentityExtractionResponse(BaseModel):
+    trace: dict[str, Any]
+    identity: dict[str, Any]
+
+
+WEB_IDENTITY_CHANNEL = "web"
+WEB_IDENTITY_INSTANCE = "default"
+
+
 def create_app() -> FastAPI:
     ensure_runtime_dirs()
     storage = Storage()
     storage.initialize()
     memory_graph_store = MemoryGraphStore()
+    identity_store = ConversationIdentityStore()
+    identity_store.initialize()
 
     app = FastAPI(title="Peppa", version=__version__)
     app.add_middleware(
@@ -76,12 +100,14 @@ def create_app() -> FastAPI:
     async def chat(request: ChatRequest) -> ChatResponse:
         try:
             settings = load_settings()
-            agent = Agent(settings=settings, storage=storage)
+            agent = Agent(settings=settings, storage=storage, identity_store=identity_store)
             result = await agent.chat(
                 user_message=request.message,
                 requested_model=request.model,
                 conversation_id=request.conversation_id,
                 temperature=request.temperature,
+                channel=WEB_IDENTITY_CHANNEL,
+                channel_instance=WEB_IDENTITY_INSTANCE,
             )
         except ConfigError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -106,6 +132,121 @@ def create_app() -> FastAPI:
     @app.get("/api/memory/graph")
     async def memory_graph() -> dict[str, Any]:
         return memory_graph_store.get_memory_graph()
+
+    @app.get("/api/identity/context")
+    async def identity_context() -> dict[str, Any]:
+        identity = identity_store.get_or_create_identity(
+            channel=WEB_IDENTITY_CHANNEL,
+            channel_instance=WEB_IDENTITY_INSTANCE,
+        )
+        return {
+            "identity": identity.public_dict(),
+            "candidates": [
+                candidate.public_dict() for candidate in identity_store.list_person_candidates()
+            ],
+        }
+
+    @app.post("/api/identity/extract", response_model=IdentityExtractionResponse)
+    async def extract_identity(request: IdentityExtractionRequest) -> IdentityExtractionResponse:
+        try:
+            settings = load_settings()
+            model_settings = settings.get_model(request.model)
+        except ConfigError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        candidates = identity_store.list_person_candidates()
+        if not candidates:
+            raise HTTPException(
+                status_code=400,
+                detail="No person memory nodes are available for identity binding.",
+            )
+
+        selected_traces = []
+        for trace_id in request.trace_ids:
+            record = storage.get_trace(trace_id)
+            if record is None:
+                raise HTTPException(status_code=404, detail=f"Trace not found: {trace_id}")
+            if _is_tool_call_trace(record.public_dict()):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Tool call traces cannot be used as identity input: {trace_id}",
+                )
+            selected_traces.append(record)
+
+        selected_traces.sort(key=lambda item: item.created_at)
+        current_identity = identity_store.get_or_create_identity(
+            channel=WEB_IDENTITY_CHANNEL,
+            channel_instance=WEB_IDENTITY_INSTANCE,
+        )
+        prompt_messages = _build_identity_extraction_messages(
+            source_traces=[trace.public_dict() for trace in selected_traces],
+            current_identity=current_identity.public_dict(),
+            candidates=[candidate.public_dict() for candidate in candidates],
+        )
+        tools = identity_update_tools()
+        tool_choice = identity_tool_choice()
+        model_client = ModelClient()
+        request_payload = model_client.build_request_payload(
+            model_settings=model_settings,
+            messages=prompt_messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            temperature=request.temperature,
+        )
+        request_payload["_peppa"] = {
+            "kind": "identity_update",
+            "source_trace_ids": request.trace_ids,
+            "source_trace_order": [trace.id for trace in selected_traces],
+            "channel": WEB_IDENTITY_CHANNEL,
+            "channel_instance": WEB_IDENTITY_INSTANCE,
+        }
+
+        response_payload: dict[str, Any] | None = None
+        assistant_message: str | None = None
+        error: str | None = None
+        started_at = perf_counter()
+        try:
+            response = await model_client.chat(
+                model_settings=model_settings,
+                messages=prompt_messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                temperature=request.temperature,
+            )
+            response_payload = response.response_payload
+            assistant_message = response.content
+            tool_errors = _apply_identity_tool_calls(
+                identity_store=identity_store,
+                tool_calls=response.tool_calls,
+            )
+            if tool_errors:
+                error = "; ".join(tool_errors)
+        except Exception as exc:
+            error = str(exc)
+
+        conversation_id = storage.create_conversation("Identity update")
+        duration_ms = int((perf_counter() - started_at) * 1000)
+        trace = storage.create_trace(
+            conversation_id=conversation_id,
+            model=model_settings.model,
+            user_message=f"Identity update from {len(selected_traces)} trace(s)",
+            assistant_message=assistant_message,
+            prompt_messages=prompt_messages,
+            memory_hits=[],
+            request_payload=request_payload,
+            response_payload=response_payload,
+            duration_ms=duration_ms,
+            error=error,
+        )
+        identity = identity_store.get_or_create_identity(
+            channel=WEB_IDENTITY_CHANNEL,
+            channel_instance=WEB_IDENTITY_INSTANCE,
+        )
+
+        return IdentityExtractionResponse(
+            trace=trace.public_dict(),
+            identity=identity.public_dict(),
+        )
 
     @app.post("/api/memory/extract", response_model=MemoryExtractionResponse)
     async def extract_memory(request: MemoryExtractionRequest) -> MemoryExtractionResponse:
@@ -194,6 +335,73 @@ def create_app() -> FastAPI:
     return app
 
 
+def _apply_identity_tool_calls(
+    *,
+    identity_store: ConversationIdentityStore,
+    tool_calls: list[Any],
+) -> list[str]:
+    errors = []
+    for tool_call in tool_calls:
+        if tool_call.name != IDENTITY_TOOL_NAME:
+            continue
+        if tool_call.parse_error or tool_call.arguments is None:
+            errors.append(tool_call.parse_error or "Identity tool call arguments are missing.")
+            continue
+        try:
+            identity_store.bind_identity_from_tool_arguments(
+                channel=WEB_IDENTITY_CHANNEL,
+                channel_instance=WEB_IDENTITY_INSTANCE,
+                arguments=tool_call.arguments,
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
+    return errors
+
+
+def _build_identity_extraction_messages(
+    *,
+    source_traces: list[dict[str, Any]],
+    current_identity: dict[str, Any],
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    context_blocks = []
+    for index, trace in enumerate(source_traces, start=1):
+        assistant_text = trace.get("assistant_message") or trace.get("error") or ""
+        context_blocks.append(
+            "\n".join(
+                [
+                    f"## Turn {index}",
+                    f"trace_id: {trace.get('id')}",
+                    f"model: {trace.get('model')}",
+                    f"user: {trace.get('user_message')}",
+                    f"assistant: {assistant_text}",
+                ]
+            )
+        )
+
+    user_content = "\n\n".join(
+        [
+            "当前对话入口身份状态：",
+            json.dumps(current_identity, ensure_ascii=False, indent=2),
+            "候选 person nodes：",
+            json.dumps(candidates, ensure_ascii=False, indent=2),
+            "以下是按时间顺序排列的对话内容：",
+            "\n\n".join(context_blocks),
+        ]
+    )
+
+    return [
+        {
+            "role": "system",
+            "content": load_skill("conversation-identity/SKILL.md"),
+        },
+        {
+            "role": "user",
+            "content": user_content,
+        },
+    ]
+
+
 def _build_memory_extraction_messages(source_traces: list[dict[str, Any]]) -> list[dict[str, Any]]:
     context_blocks = []
     for index, trace in enumerate(source_traces, start=1):
@@ -224,7 +432,10 @@ def _build_memory_extraction_messages(source_traces: list[dict[str, Any]]) -> li
 
 def _is_tool_call_trace(trace: dict[str, Any]) -> bool:
     request_meta = trace.get("request_payload", {}).get("_peppa")
-    if isinstance(request_meta, dict) and request_meta.get("kind") == "memory_extraction":
+    if isinstance(request_meta, dict) and request_meta.get("kind") in {
+        "identity_update",
+        "memory_extraction",
+    }:
         return True
 
     response_payload = trace.get("response_payload")

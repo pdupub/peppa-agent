@@ -1,4 +1,10 @@
-import type { ChatResponse, MemoryGraphResponse, PublicConfig, TraceRecord } from './types';
+import type {
+  ChatResponse,
+  IdentityContextResponse,
+  MemoryGraphResponse,
+  PublicConfig,
+  TraceRecord
+} from './types';
 
 async function requestJson<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -27,6 +33,10 @@ export function fetchTraces(): Promise<{ traces: TraceRecord[] }> {
 
 export function fetchMemoryGraph(): Promise<MemoryGraphResponse> {
   return requestJson<MemoryGraphResponse>('/api/memory/graph');
+}
+
+export function fetchIdentityContext(): Promise<IdentityContextResponse> {
+  return requestJson<IdentityContextResponse>('/api/identity/context');
 }
 
 export function sendChat(params: {
@@ -59,4 +69,22 @@ export function extractMemory(params: {
       temperature: params.temperature
     })
   });
+}
+
+export function extractIdentity(params: {
+  traceIds: string[];
+  model: string;
+  temperature: number;
+}): Promise<{ trace: TraceRecord; identity: IdentityContextResponse['identity'] }> {
+  return requestJson<{ trace: TraceRecord; identity: IdentityContextResponse['identity'] }>(
+    '/api/identity/extract',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        trace_ids: params.traceIds,
+        model: params.model,
+        temperature: params.temperature
+      })
+    }
+  );
 }
