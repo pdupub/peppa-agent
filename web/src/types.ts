@@ -7,6 +7,7 @@ export type ModelConfig = {
 export type PublicConfig = {
   default_model: string;
   models: ModelConfig[];
+  prompt_history_messages_default: number;
 };
 
 export type TraceRecord = {

@@ -11,6 +11,7 @@ import uuid
 from peppa.paths import DATABASE_PATH, ensure_runtime_dirs
 from peppa.identity import ensure_identity_schema
 from peppa.memory.graph import ensure_memory_graph_schema
+from peppa.topics import ensure_topic_boundary_schema
 
 
 @dataclass(frozen=True)
@@ -98,6 +99,7 @@ class Storage:
             )
             ensure_memory_graph_schema(connection)
             ensure_identity_schema(connection)
+            ensure_topic_boundary_schema(connection)
 
     def create_conversation(self, title: str) -> str:
         conversation_id = _new_id("conv")
@@ -139,6 +141,31 @@ class Storage:
                 (now, conversation_id),
             )
         return message_id
+
+    def list_messages(self, *, conversation_id: str, limit: int = 12) -> list[dict[str, Any]]:
+        safe_limit = max(0, min(limit, 50))
+        if safe_limit == 0:
+            return []
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT role, content
+                FROM (
+                    SELECT role, content, created_at
+                    FROM messages
+                    WHERE conversation_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                )
+                ORDER BY created_at ASC
+                """,
+                (conversation_id, safe_limit),
+            ).fetchall()
+        return [
+            {"role": row["role"], "content": row["content"]}
+            for row in rows
+            if row["role"] in {"user", "assistant"} and row["content"].strip()
+        ]
 
     def create_trace(
         self,

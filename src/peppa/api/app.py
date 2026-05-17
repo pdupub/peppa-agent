@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from peppa import __version__
 from peppa.config import ConfigError, load_settings
-from peppa.core import Agent
+from peppa.core import Agent, MAX_PROMPT_HISTORY_MESSAGES
 from peppa.identity import (
     IDENTITY_TOOL_NAME,
     ConversationIdentityStore,
@@ -24,6 +24,7 @@ from peppa.memory import MemoryGraphStore, Storage, memory_graph_update_tools, m
 from peppa.models import ModelClient
 from peppa.paths import DATABASE_PATH, ROOT_DIR, WEB_DIST_DIR, ensure_runtime_dirs
 from peppa.prompts import load_skill
+from peppa.topics import TOPIC_BOUNDARY_TOOL_NAME
 
 
 class ChatRequest(BaseModel):
@@ -31,6 +32,11 @@ class ChatRequest(BaseModel):
     model: str | None = None
     conversation_id: str | None = None
     temperature: float = Field(default=1.0, ge=0.0, le=2.0)
+    prompt_history_messages: int = Field(
+        default=MAX_PROMPT_HISTORY_MESSAGES,
+        ge=0,
+        le=50,
+    )
 
 
 class ChatResponse(BaseModel):
@@ -92,9 +98,11 @@ def create_app() -> FastAPI:
     @app.get("/api/config")
     async def config() -> dict[str, Any]:
         try:
-            return load_settings().public_dict()
+            config_payload = load_settings().public_dict()
         except ConfigError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+        config_payload["prompt_history_messages_default"] = MAX_PROMPT_HISTORY_MESSAGES
+        return config_payload
 
     @app.post("/api/chat", response_model=ChatResponse)
     async def chat(request: ChatRequest) -> ChatResponse:
@@ -106,6 +114,7 @@ def create_app() -> FastAPI:
                 requested_model=request.model,
                 conversation_id=request.conversation_id,
                 temperature=request.temperature,
+                prompt_history_messages=request.prompt_history_messages,
                 channel=WEB_IDENTITY_CHANNEL,
                 channel_instance=WEB_IDENTITY_INSTANCE,
             )
@@ -462,13 +471,26 @@ def _is_tool_call_trace(trace: dict[str, Any]) -> bool:
     choices = response_payload.get("choices")
     if not isinstance(choices, list):
         return False
-    return any(
-        isinstance(choice, dict)
-        and isinstance(choice.get("message"), dict)
-        and isinstance(choice["message"].get("tool_calls"), list)
-        and len(choice["message"]["tool_calls"]) > 0
-        for choice in choices
-    )
+    for choice in choices:
+        if not isinstance(choice, dict) or not isinstance(choice.get("message"), dict):
+            continue
+        tool_calls = choice["message"].get("tool_calls")
+        if not isinstance(tool_calls, list):
+            continue
+        for tool_call in tool_calls:
+            if _tool_call_name(tool_call) != TOPIC_BOUNDARY_TOOL_NAME:
+                return True
+    return False
+
+
+def _tool_call_name(tool_call: Any) -> str | None:
+    if not isinstance(tool_call, dict):
+        return None
+    function = tool_call.get("function")
+    if isinstance(function, dict) and isinstance(function.get("name"), str):
+        return function["name"]
+    name = tool_call.get("name")
+    return name if isinstance(name, str) else None
 
 
 def mount_web_app(app: FastAPI, dist_dir: Path) -> None:

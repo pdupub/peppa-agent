@@ -51,6 +51,7 @@ button {
 .topbar-controls,
 .model-picker,
 .temperature-control,
+.context-control,
 .status-pill,
 .panel-header,
 .json-title,
@@ -106,6 +107,7 @@ h2 {
 
 .model-picker,
 .temperature-control,
+.context-control,
 .status-pill,
 .icon-button,
 .send-button {
@@ -121,18 +123,28 @@ h2 {
   padding: 0 10px;
 }
 
-.temperature-control {
+.temperature-control,
+.context-control {
   gap: 8px;
   padding: 0 10px;
   font-size: 12px;
 }
 
-.temperature-control span {
+.temperature-control span,
+.context-control span {
   color: #8c95a5;
 }
 
 .temperature-control input {
   width: 64px;
+  border: 0;
+  outline: 0;
+  color: #eff3f8;
+  background: transparent;
+}
+
+.context-control select {
+  width: 126px;
   border: 0;
   outline: 0;
   color: #eff3f8;
@@ -796,11 +808,13 @@ pre {
 
   .topbar-controls,
   .model-picker,
-  .temperature-control {
+  .temperature-control,
+  .context-control {
     width: 100%;
   }
 
-  .model-picker select {
+  .model-picker select,
+  .context-control select {
     width: 100%;
   }
 

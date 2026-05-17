@@ -7,7 +7,6 @@ import {
   Braces,
   Database,
   Maximize2,
-  MessageSquare,
   RefreshCw,
   Send,
   Settings2,
@@ -30,6 +29,9 @@ const DEFAULT_TEMPERATURE = 1;
 const MIN_TEMPERATURE = 0;
 const MAX_TEMPERATURE = 2;
 const TEMPERATURE_STORAGE_KEY = 'peppa.temperatureByModel.v1';
+const TOPIC_BOUNDARY_TOOL_NAME = 'mark_topic_boundary';
+const DEFAULT_PROMPT_HISTORY_MESSAGES = 12;
+const PROMPT_HISTORY_MESSAGE_OPTIONS = [0, 2, 4, 6, 8, 12, 16, 24, 32, 50];
 type TraceTab = 'history' | 'memory';
 type AppRoute = 'console' | 'memory';
 
@@ -44,6 +46,9 @@ function App() {
   const [selectedModel, setSelectedModel] = useState('');
   const [temperatureByModel, setTemperatureByModel] = useState<Record<string, number>>(
     loadStoredTemperatures
+  );
+  const [promptHistoryMessages, setPromptHistoryMessages] = useState(
+    DEFAULT_PROMPT_HISTORY_MESSAGES
   );
   const [message, setMessage] = useState('');
   const [conversationId, setConversationId] = useState<string | undefined>();
@@ -83,6 +88,9 @@ function App() {
       setConfig(nextConfig);
       setIdentityContext(nextIdentityContext);
       setSelectedModel(nextConfig.default_model);
+      setPromptHistoryMessages(
+        nextConfig.prompt_history_messages_default ?? DEFAULT_PROMPT_HISTORY_MESSAGES
+      );
       applyTraces(nextTraces.traces);
       setActiveTrace(nextTraces.traces[0] ?? null);
       setError(null);
@@ -118,6 +126,7 @@ function App() {
         message,
         model: selectedModel,
         temperature: selectedTemperature,
+        promptHistoryMessages,
         conversationId
       });
       setConversationId(result.conversation_id);
@@ -263,6 +272,13 @@ function App() {
     [historyTraces]
   );
   const selectedTemperature = temperatureByModel[selectedModel] ?? DEFAULT_TEMPERATURE;
+  const promptHistoryMessageOptions = useMemo(
+    () =>
+      [...new Set([...PROMPT_HISTORY_MESSAGE_OPTIONS, promptHistoryMessages])].sort(
+        (left, right) => left - right
+      ),
+    [promptHistoryMessages]
+  );
   const currentUserIdentity = identityContext?.identity.current_user_identity ?? '用户';
   const selectedTraceCount = selectedTraceIds.size;
   const isAllHistorySelected =
@@ -360,10 +376,20 @@ function App() {
                   <h2>Chat Probe</h2>
                   <p>{activeModel?.base_url ?? 'Waiting for config'}</p>
                 </div>
-                <button className="icon-button" type="button" onClick={() => setConversationId(undefined)}>
-                  <MessageSquare size={16} />
-                  <span>New</span>
-                </button>
+                <label className="context-control" title="Messages included before the current input">
+                  <span>Context</span>
+                  <select
+                    value={promptHistoryMessages}
+                    onChange={(event) => setPromptHistoryMessages(Number(event.currentTarget.value))}
+                    aria-label="Context messages"
+                  >
+                    {promptHistoryMessageOptions.map((option) => (
+                      <option value={option} key={option}>
+                        {option} messages
+                      </option>
+                    ))}
+                  </select>
+                </label>
               </div>
 
               <div className="conversation-window">
@@ -679,8 +705,20 @@ function isToolCallTrace(trace: TraceRecord): boolean {
     const choiceRecord = getRecord(choice);
     const message = getRecord(choiceRecord?.message);
     const toolCalls = message?.tool_calls;
-    return Array.isArray(toolCalls) && toolCalls.length > 0;
+    return (
+      Array.isArray(toolCalls) &&
+      toolCalls.some((toolCall) => getToolCallName(toolCall) !== TOPIC_BOUNDARY_TOOL_NAME)
+    );
   });
+}
+
+function getToolCallName(value: unknown): string | null {
+  const toolCall = getRecord(value);
+  const functionRecord = getRecord(toolCall?.function);
+  if (typeof functionRecord?.name === 'string') {
+    return functionRecord.name;
+  }
+  return typeof toolCall?.name === 'string' ? toolCall.name : null;
 }
 
 function getRecord(value: unknown): Record<string, unknown> | null {

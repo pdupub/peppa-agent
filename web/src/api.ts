@@ -43,6 +43,7 @@ export function sendChat(params: {
   message: string;
   model: string;
   temperature: number;
+  promptHistoryMessages: number;
   conversationId?: string;
 }): Promise<ChatResponse> {
   return requestJson<ChatResponse>('/api/chat', {
@@ -51,6 +52,7 @@ export function sendChat(params: {
       message: params.message,
       model: params.model,
       temperature: params.temperature,
+      prompt_history_messages: params.promptHistoryMessages,
       conversation_id: params.conversationId
     })
   });
