@@ -49,14 +49,6 @@ class TopicBoundaryStore:
         with self._connect() as connection:
             ensure_topic_boundary_schema(connection)
 
-    def build_hits(self, tool_calls: list[ToolCall]) -> list[dict[str, Any]]:
-        hits = []
-        for tool_call in tool_calls:
-            if tool_call.name != TOPIC_BOUNDARY_TOOL_NAME:
-                continue
-            hits.append(_hit_from_tool_call(tool_call))
-        return hits
-
     def record_tool_calls(
         self,
         *,
@@ -147,22 +139,6 @@ class TopicBoundaryStore:
         connection = sqlite3.connect(self.database_path)
         connection.row_factory = sqlite3.Row
         return connection
-
-
-def _hit_from_tool_call(tool_call: ToolCall) -> dict[str, Any]:
-    parsed = _as_record(tool_call.arguments)
-    topic_title = _clean_text(parsed.get("topic_title"))
-    parse_error = tool_call.parse_error
-    return {
-        "kind": "topic_boundary",
-        "tool_call_id": tool_call.id,
-        "status": "invalid" if parse_error or not topic_title else "valid",
-        "topic_title": topic_title,
-        "reason": _clean_text(parsed.get("reason")),
-        "confidence": _confidence(parsed.get("confidence")),
-        "tags": _text_list(parsed.get("tags")),
-        "parse_error": parse_error,
-    }
 
 
 def _as_record(value: Any) -> dict[str, Any]:

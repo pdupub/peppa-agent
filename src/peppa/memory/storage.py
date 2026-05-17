@@ -22,7 +22,6 @@ class TraceRecord:
     user_message: str
     assistant_message: str | None
     prompt_messages: list[dict[str, Any]]
-    memory_hits: list[dict[str, Any]]
     request_payload: dict[str, Any]
     response_payload: dict[str, Any] | None
     duration_ms: int | None
@@ -37,7 +36,6 @@ class TraceRecord:
             "user_message": self.user_message,
             "assistant_message": self.assistant_message,
             "prompt_messages": self.prompt_messages,
-            "memory_hits": self.memory_hits,
             "request_payload": self.request_payload,
             "response_payload": self.response_payload,
             "duration_ms": self.duration_ms,
@@ -175,7 +173,6 @@ class Storage:
         user_message: str,
         assistant_message: str | None,
         prompt_messages: list[dict[str, Any]],
-        memory_hits: list[dict[str, Any]],
         request_payload: dict[str, Any],
         response_payload: dict[str, Any] | None,
         duration_ms: int | None,
@@ -188,7 +185,6 @@ class Storage:
             user_message=user_message,
             assistant_message=assistant_message,
             prompt_messages=prompt_messages,
-            memory_hits=memory_hits,
             request_payload=request_payload,
             response_payload=response_payload,
             duration_ms=duration_ms,
@@ -221,7 +217,7 @@ class Storage:
                     trace.user_message,
                     trace.assistant_message,
                     json.dumps(trace.prompt_messages, ensure_ascii=False),
-                    json.dumps(trace.memory_hits, ensure_ascii=False),
+                    json.dumps([], ensure_ascii=False),
                     json.dumps(trace.request_payload, ensure_ascii=False),
                     json.dumps(trace.response_payload, ensure_ascii=False)
                     if trace.response_payload is not None
@@ -275,7 +271,6 @@ def _trace_from_row(row: sqlite3.Row) -> TraceRecord:
         user_message=row["user_message"],
         assistant_message=row["assistant_message"],
         prompt_messages=json.loads(row["prompt_json"]),
-        memory_hits=json.loads(row["memory_json"]),
         request_payload=json.loads(row["request_json"]),
         response_payload=json.loads(row["response_json"]) if row["response_json"] else None,
         duration_ms=row["duration_ms"],

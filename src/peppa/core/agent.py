@@ -77,7 +77,6 @@ class Agent:
             content=clean_message,
         )
 
-        memory_hits: list[dict[str, Any]] = []
         identity = self.identity_store.get_or_create_identity(
             channel=channel,
             channel_instance=channel_instance,
@@ -130,7 +129,6 @@ class Agent:
             response_payload = response.response_payload
             response_tool_calls = response.tool_calls
             assistant_message = response.content
-            memory_hits = self.topic_boundary_store.build_hits(response_tool_calls)
             self.storage.add_message(
                 conversation_id=conversation_id,
                 role="assistant",
@@ -147,7 +145,6 @@ class Agent:
             user_message=clean_message,
             assistant_message=assistant_message,
             prompt_messages=prompt_messages,
-            memory_hits=memory_hits,
             request_payload=request_payload,
             response_payload=response_payload,
             duration_ms=duration_ms,

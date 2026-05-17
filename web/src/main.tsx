@@ -521,12 +521,6 @@ function App() {
               onExpand={setExpandedJsonPanel}
             />
             <JsonPanel
-              title="Memory Hits"
-              icon={<Database size={16} />}
-              value={activeTrace?.memory_hits ?? []}
-              onExpand={setExpandedJsonPanel}
-            />
-            <JsonPanel
               title="Request"
               icon={<Braces size={16} />}
               value={activeTrace?.request_payload ?? {}}

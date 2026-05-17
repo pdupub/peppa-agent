@@ -35,7 +35,7 @@ confidence
 tags
 ```
 
-这些数据会进入 trace 的 `memory_hits`，方便在调试台观察；同时写入 `topic_boundaries` 表，供后续会话分段、记忆抽取范围和 recall 使用。
+这些数据会写入 `topic_boundaries` 表，供后续会话分段、记忆抽取范围和 recall 使用。聊天 trace 仍然保留原始 request / response，必要时可以从 response payload 审计模型是否发起了 tool call。
 
 ## 当前取舍
 

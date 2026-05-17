@@ -83,11 +83,10 @@ var/
 - 模型输出展示
 - 最近 trace 列表
 - prompt JSON
-- memory hits JSON
 - request JSON
 - response JSON
 
-当前版本的 `memory_hits` 为空数组，这是有意保留的展示位置。后续实现记忆检索后，调试台可以直接展示检索结果。
+记忆图和抽取结果由独立 Memory 页面展示，聊天调试台只保留本轮 prompt、request 和 response 的原始观察面板。
 
 ## 验收方式
 

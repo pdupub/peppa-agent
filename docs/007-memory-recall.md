@@ -60,7 +60,7 @@ recall 结果不应只返回一串文本，而应按用途分层：
 - 最终注入 prompt 的 memory context
 - 被丢弃的候选及简短原因
 
-调试台现有的 `memory_hits` 位置可以作为第一版展示入口。
+召回调试信息应进入专门的 recall trace 元数据或 Memory 页面，而不是复用聊天 trace 中已经移除的 `memory_hits` 字段。
 
 ## 当前非目标
 

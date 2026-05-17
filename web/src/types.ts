@@ -17,7 +17,6 @@ export type TraceRecord = {
   user_message: string;
   assistant_message: string | null;
   prompt_messages: Array<Record<string, unknown>>;
-  memory_hits: Array<Record<string, unknown>>;
   request_payload: Record<string, unknown>;
   response_payload: Record<string, unknown> | null;
   duration_ms: number | null;
