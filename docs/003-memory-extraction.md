@@ -14,6 +14,8 @@
 
 抽取结果稳定后，后续会继续进入 recall 和 memory context 注入流程。
 
+当前 memory extraction 不应继续向复杂记忆本体扩张。记忆过程仍缺少两类更实际的能力：一是把工程化、精确、重复出现的内容落到 document 或未来的 skill 候选中；二是对已有 node 做合并、摘要更新、别名或 tag 合并等基础维护。完成这些之后，再进入 recall，才能让“记住”真正被后续对话使用。
+
 ## 使用方式
 
 在调试台的 `Recent Traces` 中，可以勾选若干普通 trace。
@@ -112,8 +114,10 @@
 
 - memory recall
 - memory context 注入
-- 文档自动写入
+- 文档或 skill 自动写入
 - 复杂 node merge
 - `supersedes` 的真实覆盖逻辑
 
 当前已实现第一版持久化：按 `type + normalized_title` 去重 node，按 `source_node_id + target_node_id + relation_type` 去重 edge，按 `normalized_name` 去重 tag。每次抽取仍会额外记录 observation，用于追溯来源和统计提及频率。
+
+其中 `document_suggestions` 只是把外置精确记忆的候选保存下来，还没有自动修改文档。未来如果某类项目经验反复出现，并且已经有足够具体的示例，可以从 document 或 memory 中人工或半自动沉淀为 skill；这一点不要求当前 tool schema 立即新增字段。
