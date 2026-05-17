@@ -266,7 +266,7 @@ def create_app() -> FastAPI:
                     status_code=400,
                     detail=f"Memory extraction traces cannot be used as input: {trace_id}",
                 )
-        selected_traces.append(record)
+            selected_traces.append(record)
 
         selected_traces.sort(key=lambda item: item.created_at)
         current_identity = identity_store.get_or_create_identity(
