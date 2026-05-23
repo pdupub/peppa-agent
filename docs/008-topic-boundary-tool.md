@@ -33,12 +33,15 @@ topic_title
 reason
 confidence
 tags
+assistant_message
 ```
 
-这些数据会写入 `topic_boundaries` 表，供后续会话分段、记忆抽取范围和 recall 使用。聊天 trace 仍然保留原始 request / response，必要时可以从 response payload 审计模型是否发起了 tool call。
+其中 `assistant_message` 是本轮给用户看的正常回复正文。它不写入 `topic_boundaries` 的结构化列，但会保留在 raw tool arguments 中。
 
-## 当前取舍
+`topic_title`、`reason`、`confidence` 和 `tags` 会写入 `topic_boundaries` 表，供后续会话分段、记忆抽取范围和 recall 使用。聊天 trace 仍然保留原始 request / response，必要时可以从 response payload 审计模型是否发起了 tool call。
 
-当前版本不增加 content 为空的自动兜底。
+## 空 content 兜底
 
-这是有意保留的观察点：如果模型在调用该 tool 时经常返回空 `content`，说明这种“正常回答 + 附带 tool call”的设计在当前模型上不够稳定，需要调整方案。
+部分模型在返回 tool call 时会把普通 assistant `content` 留空。服务端会先使用 `content`；如果 `content` 为空且本轮包含 `mark_topic_boundary`，则从 tool arguments 的 `assistant_message` 回填普通 assistant 消息。
+
+回填后的内容会写入现有 `messages.content` 和 `traces.assistant_message`，不改变数据库结构。这样网页回显、后续上下文条数选择、记忆抽取和身份抽取都会把它当作普通 assistant 回复处理。

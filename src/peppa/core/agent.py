@@ -7,9 +7,10 @@ from typing import Any
 from peppa.config import PeppaSettings
 from peppa.identity import ConversationIdentityStore
 from peppa.memory import MemoryRecallStore, Storage, TraceRecord
-from peppa.models import ModelClient
+from peppa.models import ModelClient, ToolCall
 from peppa.prompts import load_prompt
 from peppa.topics import (
+    TOPIC_BOUNDARY_TOOL_NAME,
     TopicBoundaryStore,
     topic_boundary_tool_choice,
     topic_boundary_tools,
@@ -139,7 +140,10 @@ class Agent:
             }
             response_payload = response.response_payload
             response_tool_calls = response.tool_calls
-            assistant_message = response.content
+            assistant_message = _resolve_visible_assistant_message(
+                content=response.content,
+                tool_calls=response_tool_calls,
+            )
             self.storage.add_message(
                 conversation_id=conversation_id,
                 role="assistant",
@@ -192,3 +196,29 @@ def _build_memory_context_message(context_text: str) -> dict[str, str] | None:
             ]
         ),
     }
+
+
+def _resolve_visible_assistant_message(
+    *,
+    content: str,
+    tool_calls: list[ToolCall],
+) -> str:
+    if content.strip():
+        return content
+
+    for tool_call in tool_calls:
+        if tool_call.name != TOPIC_BOUNDARY_TOOL_NAME:
+            continue
+        if tool_call.parse_error or tool_call.arguments is None:
+            continue
+        assistant_message = _clean_text(tool_call.arguments.get("assistant_message"))
+        if assistant_message:
+            return assistant_message
+
+    return content
+
+
+def _clean_text(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()

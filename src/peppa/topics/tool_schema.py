@@ -38,8 +38,21 @@ TOPIC_BOUNDARY_TOOL: dict[str, Any] = {
                     "description": "少量可用于后续回忆或分段的人类可读标签。",
                     "items": {"type": "string"},
                 },
+                "assistant_message": {
+                    "type": "string",
+                    "description": (
+                        "本轮应该展示给用户的完整正常回复正文。调用该工具时必须填写，"
+                        "内容应和 assistant content 中的可见回复一致，不要提及工具调用。"
+                    ),
+                },
             },
-            "required": ["topic_title", "reason", "confidence", "tags"],
+            "required": [
+                "topic_title",
+                "reason",
+                "confidence",
+                "tags",
+                "assistant_message",
+            ],
         },
     },
 }
