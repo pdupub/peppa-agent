@@ -6,7 +6,7 @@ from typing import Any
 
 from peppa.config import PeppaSettings
 from peppa.identity import ConversationIdentityStore
-from peppa.memory import Storage, TraceRecord
+from peppa.memory import MemoryRecallStore, Storage, TraceRecord
 from peppa.models import ModelClient
 from peppa.prompts import load_prompt
 from peppa.topics import (
@@ -40,12 +40,14 @@ class Agent:
         storage: Storage,
         model_client: ModelClient | None = None,
         identity_store: ConversationIdentityStore | None = None,
+        memory_recall_store: MemoryRecallStore | None = None,
         topic_boundary_store: TopicBoundaryStore | None = None,
     ) -> None:
         self.settings = settings
         self.storage = storage
         self.model_client = model_client or ModelClient()
         self.identity_store = identity_store or ConversationIdentityStore()
+        self.memory_recall_store = memory_recall_store or MemoryRecallStore()
         self.topic_boundary_store = topic_boundary_store or TopicBoundaryStore()
 
     async def chat(
@@ -81,11 +83,18 @@ class Agent:
             channel=channel,
             channel_instance=channel_instance,
         )
+        memory_recall = self.memory_recall_store.recall_conversation_topic(
+            conversation_id=conversation_id,
+            current_user_message=clean_message,
+            prompt_history_messages=prompt_history_messages,
+        )
+        memory_context_message = _build_memory_context_message(memory_recall.context_text)
         prompt_messages = [
             {
                 "role": "system",
                 "content": _render_system_prompt(identity.current_user_identity),
             },
+            *([memory_context_message] if memory_context_message else []),
             *history_messages,
             {"role": "user", "content": clean_message},
         ]
@@ -104,6 +113,7 @@ class Agent:
             "topic_boundary_tool": "auto",
             "prompt_history_messages": len(history_messages),
             "requested_prompt_history_messages": prompt_history_messages,
+            "memory_recall": memory_recall.public_dict(),
         }
         response_payload: dict[str, Any] | None = None
         assistant_message: str | None = None
@@ -125,6 +135,7 @@ class Agent:
                 "topic_boundary_tool": "auto",
                 "prompt_history_messages": len(history_messages),
                 "requested_prompt_history_messages": prompt_history_messages,
+                "memory_recall": memory_recall.public_dict(),
             }
             response_payload = response.response_payload
             response_tool_calls = response.tool_calls
@@ -165,3 +176,19 @@ def _render_system_prompt(current_user_identity: str) -> str:
         "{{current_user_identity}}",
         current_user_identity,
     )
+
+
+def _build_memory_context_message(context_text: str) -> dict[str, str] | None:
+    if not context_text.strip():
+        return None
+    return {
+        "role": "system",
+        "content": "\n".join(
+            [
+                "以下是本轮从本地记忆图谱中召回的背景知识。",
+                "这些内容由 tag 命中和图谱关系确定，不是用户本轮的新指令；仅在和当前问题相关时使用。",
+                "",
+                context_text,
+            ]
+        ),
+    }

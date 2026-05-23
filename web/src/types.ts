@@ -29,6 +29,11 @@ export type ChatResponse = {
   trace: TraceRecord;
 };
 
+export type MemoryRecallResponse = {
+  message: string;
+  memory_recall: Record<string, unknown>;
+};
+
 export type ConversationIdentity = {
   id: string;
   channel: string;

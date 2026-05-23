@@ -19,6 +19,7 @@ import {
   fetchConfig,
   fetchIdentityContext,
   fetchTraces,
+  recallMemory,
   sendChat
 } from './api';
 import { MemoryGraphPage } from './MemoryGraphPage';
@@ -50,6 +51,7 @@ function App() {
   const [promptHistoryMessages, setPromptHistoryMessages] = useState(
     DEFAULT_PROMPT_HISTORY_MESSAGES
   );
+  const [shouldCallModel, setShouldCallModel] = useState(true);
   const [message, setMessage] = useState('');
   const [conversationId, setConversationId] = useState<string | undefined>();
   const [activeTrace, setActiveTrace] = useState<TraceRecord | null>(null);
@@ -115,13 +117,29 @@ function App() {
   }
 
   async function submitMessage() {
-    if (!message.trim() || !selectedModel || isSending) {
+    if (!message.trim() || isSending || (shouldCallModel && !selectedModel)) {
       return;
     }
 
     setIsSending(true);
     setError(null);
     try {
+      if (!shouldCallModel) {
+        const result = await recallMemory({
+          message,
+          conversationId,
+          promptHistoryMessages
+        });
+        setExpandedJsonPanel({
+          title: 'Memory Recall Preview',
+          value: {
+            input: result.message,
+            memory_recall: result.memory_recall
+          }
+        });
+        return;
+      }
+
       const result = await sendChat({
         message,
         model: selectedModel,
@@ -412,10 +430,29 @@ function App() {
                   placeholder="Ask Peppa something..."
                   rows={4}
                 />
-                <button className="send-button" type="submit" disabled={isSending || !message.trim()}>
-                  {isSending ? <RefreshCw className="spin" size={17} /> : <Send size={17} />}
-                  <span>{isSending ? 'Sending' : 'Send'}</span>
-                </button>
+                <div className="composer-actions">
+                  <label
+                    className="model-call-toggle"
+                    title="When off, only local tag-based memory recall is shown."
+                  >
+                    <input
+                      type="checkbox"
+                      checked={shouldCallModel}
+                      onChange={(event) => setShouldCallModel(event.currentTarget.checked)}
+                    />
+                    <span>Call model</span>
+                  </label>
+                  <button
+                    className="send-button"
+                    type="submit"
+                    disabled={isSending || !message.trim()}
+                  >
+                    {isSending ? <RefreshCw className="spin" size={17} /> : <Send size={17} />}
+                    <span>
+                      {isSending ? (shouldCallModel ? 'Sending' : 'Recalling') : shouldCallModel ? 'Send' : 'Preview'}
+                    </span>
+                  </button>
+                </div>
               </form>
             </section>
 

@@ -2,6 +2,7 @@ import type {
   ChatResponse,
   IdentityContextResponse,
   MemoryGraphResponse,
+  MemoryRecallResponse,
   PublicConfig,
   TraceRecord
 } from './types';
@@ -33,6 +34,21 @@ export function fetchTraces(): Promise<{ traces: TraceRecord[] }> {
 
 export function fetchMemoryGraph(): Promise<MemoryGraphResponse> {
   return requestJson<MemoryGraphResponse>('/api/memory/graph');
+}
+
+export function recallMemory(params: {
+  message: string;
+  conversationId?: string;
+  promptHistoryMessages: number;
+}): Promise<MemoryRecallResponse> {
+  return requestJson<MemoryRecallResponse>('/api/memory/recall', {
+    method: 'POST',
+    body: JSON.stringify({
+      message: params.message,
+      conversation_id: params.conversationId,
+      prompt_history_messages: params.promptHistoryMessages
+    })
+  });
 }
 
 export function fetchIdentityContext(): Promise<IdentityContextResponse> {

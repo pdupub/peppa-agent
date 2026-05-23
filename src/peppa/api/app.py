@@ -20,7 +20,13 @@ from peppa.identity import (
     identity_tool_choice,
     identity_update_tools,
 )
-from peppa.memory import MemoryGraphStore, Storage, memory_graph_update_tools, memory_tool_choice
+from peppa.memory import (
+    MemoryGraphStore,
+    MemoryRecallStore,
+    Storage,
+    memory_graph_update_tools,
+    memory_tool_choice,
+)
 from peppa.models import ModelClient
 from peppa.paths import DATABASE_PATH, ROOT_DIR, WEB_DIST_DIR, ensure_runtime_dirs
 from peppa.prompts import load_skill
@@ -42,6 +48,21 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     conversation_id: str
     trace: dict[str, Any]
+
+
+class MemoryRecallRequest(BaseModel):
+    message: str = Field(min_length=1)
+    conversation_id: str | None = None
+    prompt_history_messages: int = Field(
+        default=MAX_PROMPT_HISTORY_MESSAGES,
+        ge=0,
+        le=50,
+    )
+
+
+class MemoryRecallResponse(BaseModel):
+    message: str
+    memory_recall: dict[str, Any]
 
 
 class MemoryExtractionRequest(BaseModel):
@@ -74,6 +95,7 @@ def create_app() -> FastAPI:
     storage = Storage()
     storage.initialize()
     memory_graph_store = MemoryGraphStore()
+    memory_recall_store = MemoryRecallStore()
     identity_store = ConversationIdentityStore()
     identity_store.initialize()
 
@@ -108,7 +130,12 @@ def create_app() -> FastAPI:
     async def chat(request: ChatRequest) -> ChatResponse:
         try:
             settings = load_settings()
-            agent = Agent(settings=settings, storage=storage, identity_store=identity_store)
+            agent = Agent(
+                settings=settings,
+                storage=storage,
+                identity_store=identity_store,
+                memory_recall_store=memory_recall_store,
+            )
             result = await agent.chat(
                 user_message=request.message,
                 requested_model=request.model,
@@ -124,6 +151,24 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         return ChatResponse(**result.public_dict())
+
+    @app.post("/api/memory/recall", response_model=MemoryRecallResponse)
+    async def recall_memory(request: MemoryRecallRequest) -> MemoryRecallResponse:
+        clean_message = request.message.strip()
+        if not clean_message:
+            raise HTTPException(status_code=400, detail="Message cannot be empty.")
+        if request.conversation_id:
+            result = memory_recall_store.recall_conversation_topic(
+                conversation_id=request.conversation_id,
+                current_user_message=clean_message,
+                prompt_history_messages=request.prompt_history_messages,
+            )
+        else:
+            result = memory_recall_store.recall(clean_message)
+        return MemoryRecallResponse(
+            message=clean_message,
+            memory_recall=result.public_dict(),
+        )
 
     @app.get("/api/traces")
     async def traces(limit: int = 25) -> dict[str, Any]:
