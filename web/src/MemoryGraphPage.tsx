@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ArrowLeft, Database, GitBranch, RefreshCw, Tag } from 'lucide-react';
-import { fetchMemoryGraph } from './api';
+import { ArrowLeft, Database, GitBranch, RefreshCw, Tag, Trash2 } from 'lucide-react';
+import { deleteMemoryGraphEdge, deleteMemoryGraphNode, fetchMemoryGraph } from './api';
 import type {
   MemoryGraphEdge,
   MemoryGraphNode,
@@ -35,6 +35,7 @@ export function MemoryGraphPage({ onBack }: { onBack: () => void }) {
   const [memoryGraph, setMemoryGraph] = useState<MemoryGraphResponse | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const graphRef = useRef<G6Graph | null>(null);
@@ -183,6 +184,34 @@ export function MemoryGraphPage({ onBack }: { onBack: () => void }) {
     }
   }
 
+  async function deleteSelection() {
+    if (!selection || isDeleting) {
+      return;
+    }
+
+    const message =
+      selection.kind === 'node'
+        ? `Delete node "${selection.value.title}" and every edge linked to it?`
+        : `Delete edge "${selection.value.source_title} -> ${selection.value.target_title}"? Isolated endpoint nodes will also be deleted.`;
+    if (!window.confirm(message)) {
+      return;
+    }
+
+    setIsDeleting(true);
+    setError(null);
+    try {
+      const nextGraph =
+        selection.kind === 'node'
+          ? await deleteMemoryGraphNode(selection.value.id)
+          : await deleteMemoryGraphEdge(selection.value.id);
+      setMemoryGraph(nextGraph);
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : 'Failed to delete memory graph item.');
+    } finally {
+      setIsDeleting(false);
+    }
+  }
+
   const nodeTypeCounts = useMemo(() => countNodeTypes(memoryGraph?.nodes ?? []), [memoryGraph]);
   const topTags = useMemo(() => collectTopTags(memoryGraph), [memoryGraph]);
 
@@ -263,7 +292,11 @@ export function MemoryGraphPage({ onBack }: { onBack: () => void }) {
           <section>
             <h3>Selection</h3>
             {selection ? (
-              <MemorySelection selection={selection} />
+              <MemorySelection
+                selection={selection}
+                isDeleting={isDeleting}
+                onDelete={() => void deleteSelection()}
+              />
             ) : (
               <p className="memory-muted">Click a node or edge to inspect it.</p>
             )}
@@ -284,7 +317,15 @@ function MemoryStat({ icon, label, value }: { icon: ReactNode; label: string; va
   );
 }
 
-function MemorySelection({ selection }: { selection: Selection }) {
+function MemorySelection({
+  selection,
+  isDeleting,
+  onDelete
+}: {
+  selection: Selection;
+  isDeleting: boolean;
+  onDelete: () => void;
+}) {
   if (selection.kind === 'edge') {
     const edge = selection.value;
     return (
@@ -296,6 +337,15 @@ function MemorySelection({ selection }: { selection: Selection }) {
         <p>{edge.summary || 'No summary.'}</p>
         <TagCloud tags={edge.tags} />
         <small>{edge.source_trace_ids.length} source trace(s)</small>
+        <button
+          className="memory-delete-button"
+          type="button"
+          disabled={isDeleting}
+          onClick={onDelete}
+        >
+          <Trash2 size={14} />
+          <span>{isDeleting ? 'Deleting...' : 'Delete'}</span>
+        </button>
       </div>
     );
   }
@@ -308,6 +358,15 @@ function MemorySelection({ selection }: { selection: Selection }) {
       <p>{node.summary || 'No summary.'}</p>
       <TagCloud tags={node.tags} />
       <small>{node.source_trace_ids.length} source trace(s)</small>
+      <button
+        className="memory-delete-button"
+        type="button"
+        disabled={isDeleting}
+        onClick={onDelete}
+      >
+        <Trash2 size={14} />
+        <span>{isDeleting ? 'Deleting...' : 'Delete'}</span>
+      </button>
     </div>
   );
 }

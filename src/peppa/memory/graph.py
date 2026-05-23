@@ -61,6 +61,7 @@ def ensure_memory_graph_schema(connection: sqlite3.Connection) -> None:
             name TEXT NOT NULL,
             normalized_name TEXT NOT NULL UNIQUE,
             kind TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
             mention_count INTEGER NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -210,6 +211,12 @@ def ensure_memory_graph_schema(connection: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_memory_edge_observations_edge
             ON memory_edge_observations(resolved_edge_id);
         """
+    )
+    _ensure_column(
+        connection,
+        table_name="memory_tags",
+        column_name="status",
+        column_definition="TEXT NOT NULL DEFAULT 'active'",
     )
 
 
@@ -411,6 +418,7 @@ class MemoryGraphStore:
                     FROM memory_node_tags AS link
                     JOIN memory_tags AS tag
                         ON tag.id = link.tag_id
+                    WHERE tag.status = 'active'
                     ORDER BY tag.name ASC
                     """
                 ).fetchall()
@@ -429,6 +437,7 @@ class MemoryGraphStore:
                     FROM memory_edge_tags AS link
                     JOIN memory_tags AS tag
                         ON tag.id = link.tag_id
+                    WHERE tag.status = 'active'
                     ORDER BY tag.name ASC
                     """
                 ).fetchall()
@@ -459,7 +468,7 @@ class MemoryGraphStore:
                     SELECT
                         (SELECT COUNT(*) FROM memory_nodes WHERE status = 'active') AS nodes,
                         (SELECT COUNT(*) FROM memory_edges WHERE status = 'active') AS edges,
-                        (SELECT COUNT(*) FROM memory_tags) AS tags,
+                        (SELECT COUNT(*) FROM memory_tags WHERE status = 'active') AS tags,
                         (SELECT COUNT(*) FROM memory_extraction_runs) AS extraction_runs
                     """
                 ).fetchone()
@@ -484,6 +493,139 @@ class MemoryGraphStore:
             ],
             "stats": stats,
         }
+
+    def delete_node(self, node_id: str) -> bool:
+        clean_node_id = _clean_text(node_id)
+        if not clean_node_id:
+            return False
+
+        now = _now()
+        with self._connect() as connection:
+            ensure_memory_graph_schema(connection)
+            ensure_identity_schema(connection)
+            node = connection.execute(
+                """
+                SELECT id
+                FROM memory_nodes
+                WHERE id = ? AND status = 'active'
+                """,
+                (clean_node_id,),
+            ).fetchone()
+            if node is None:
+                return False
+
+            edge_ids = [
+                row["id"]
+                for row in connection.execute(
+                    """
+                    SELECT id
+                    FROM memory_edges
+                    WHERE status = 'active'
+                        AND (source_node_id = ? OR target_node_id = ?)
+                    """,
+                    (clean_node_id, clean_node_id),
+                ).fetchall()
+            ]
+            affected_tag_ids = set(_tag_ids_for_nodes(connection, [clean_node_id]))
+            affected_tag_ids.update(_tag_ids_for_edges(connection, edge_ids))
+
+            if edge_ids:
+                placeholders = _placeholders_from_ids(edge_ids)
+                connection.execute(
+                    f"DELETE FROM memory_edge_tags WHERE edge_id IN ({placeholders})",
+                    edge_ids,
+                )
+                connection.execute(
+                    f"""
+                    UPDATE memory_edges
+                    SET status = 'deleted',
+                        updated_at = ?
+                    WHERE id IN ({placeholders})
+                    """,
+                    [now, *edge_ids],
+                )
+
+            connection.execute(
+                "DELETE FROM memory_node_tags WHERE node_id = ?",
+                (clean_node_id,),
+            )
+            connection.execute(
+                """
+                UPDATE memory_nodes
+                SET status = 'deleted',
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (now, clean_node_id),
+            )
+            _clear_identity_bindings(connection, [clean_node_id], now)
+            _delete_orphan_tags(connection, affected_tag_ids, now)
+
+        return True
+
+    def delete_edge(self, edge_id: str) -> bool:
+        clean_edge_id = _clean_text(edge_id)
+        if not clean_edge_id:
+            return False
+
+        now = _now()
+        with self._connect() as connection:
+            ensure_memory_graph_schema(connection)
+            ensure_identity_schema(connection)
+            edge = connection.execute(
+                """
+                SELECT id, source_node_id, target_node_id
+                FROM memory_edges
+                WHERE id = ? AND status = 'active'
+                """,
+                (clean_edge_id,),
+            ).fetchone()
+            if edge is None:
+                return False
+
+            endpoint_ids = _unique_texts([edge["source_node_id"], edge["target_node_id"]])
+            affected_tag_ids = set(_tag_ids_for_edges(connection, [clean_edge_id]))
+            connection.execute(
+                "DELETE FROM memory_edge_tags WHERE edge_id = ?",
+                (clean_edge_id,),
+            )
+            connection.execute(
+                """
+                UPDATE memory_edges
+                SET status = 'deleted',
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (now, clean_edge_id),
+            )
+
+            orphan_node_ids = [
+                node_id
+                for node_id in endpoint_ids
+                if _is_active_orphan_node(connection, node_id)
+            ]
+            affected_tag_ids.update(_tag_ids_for_nodes(connection, orphan_node_ids))
+            if orphan_node_ids:
+                placeholders = _placeholders_from_ids(orphan_node_ids)
+                connection.execute(
+                    f"DELETE FROM memory_node_tags WHERE node_id IN ({placeholders})",
+                    orphan_node_ids,
+                )
+                connection.execute(
+                    f"""
+                    UPDATE memory_nodes
+                    SET status = 'deleted',
+                        updated_at = ?
+                    WHERE id IN ({placeholders})
+                        AND status = 'active'
+                    """,
+                    [now, *orphan_node_ids],
+                )
+                _clear_identity_bindings(connection, orphan_node_ids, now)
+
+            _delete_orphan_tags(connection, affected_tag_ids, now)
+
+        return True
 
     def _record_failed_run(
         self,
@@ -901,7 +1043,7 @@ class MemoryGraphStore:
         normalized_name = _normalize(name)
         row = connection.execute(
             """
-            SELECT id
+            SELECT id, status
             FROM memory_tags
             WHERE normalized_name = ?
             """,
@@ -913,6 +1055,7 @@ class MemoryGraphStore:
                 UPDATE memory_tags
                 SET name = ?,
                     kind = ?,
+                    status = 'active',
                     mention_count = mention_count + 1,
                     updated_at = ?
                 WHERE id = ?
@@ -929,13 +1072,14 @@ class MemoryGraphStore:
                 name,
                 normalized_name,
                 kind,
+                status,
                 mention_count,
                 created_at,
                 updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (tag_id, name, normalized_name, kind, 1, now, now),
+            (tag_id, name, normalized_name, kind, "active", 1, now, now),
         )
         return tag_id, "created"
 
@@ -952,7 +1096,7 @@ class MemoryGraphStore:
     ) -> tuple[str, str]:
         row = connection.execute(
             """
-            SELECT id, confidence, summary
+            SELECT id, confidence, summary, status
             FROM memory_nodes
             WHERE type = ? AND normalized_title = ?
             """,
@@ -967,6 +1111,7 @@ class MemoryGraphStore:
                 SET title = ?,
                     summary = ?,
                     confidence = ?,
+                    status = 'active',
                     mention_count = mention_count + 1,
                     updated_at = ?
                 WHERE id = ?
@@ -1026,7 +1171,7 @@ class MemoryGraphStore:
     ) -> tuple[str, str]:
         row = connection.execute(
             """
-            SELECT id, confidence, summary
+            SELECT id, confidence, summary, status
             FROM memory_edges
             WHERE source_node_id = ? AND target_node_id = ? AND relation_type = ?
             """,
@@ -1040,6 +1185,7 @@ class MemoryGraphStore:
                 UPDATE memory_edges
                 SET summary = ?,
                     confidence = ?,
+                    status = 'active',
                     mention_count = mention_count + 1,
                     updated_at = ?
                 WHERE id = ?
@@ -1281,6 +1427,164 @@ def _group_source_trace_ids(rows: list[sqlite3.Row]) -> dict[str, list[str]]:
         source_trace_id = row["source_trace_id"]
         grouped.setdefault(owner_id, set()).add(source_trace_id)
     return {owner_id: sorted(source_ids) for owner_id, source_ids in grouped.items()}
+
+
+def _ensure_column(
+    connection: sqlite3.Connection,
+    *,
+    table_name: str,
+    column_name: str,
+    column_definition: str,
+) -> None:
+    columns = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+    if any(row["name"] == column_name for row in columns):
+        return
+    connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}")
+
+
+def _tag_ids_for_nodes(connection: sqlite3.Connection, node_ids: list[str]) -> list[str]:
+    clean_ids = _unique_texts(node_ids)
+    if not clean_ids:
+        return []
+    return [
+        row["tag_id"]
+        for row in connection.execute(
+            f"""
+            SELECT DISTINCT tag_id
+            FROM memory_node_tags
+            WHERE node_id IN ({_placeholders_from_ids(clean_ids)})
+            """,
+            clean_ids,
+        ).fetchall()
+    ]
+
+
+def _tag_ids_for_edges(connection: sqlite3.Connection, edge_ids: list[str]) -> list[str]:
+    clean_ids = _unique_texts(edge_ids)
+    if not clean_ids:
+        return []
+    return [
+        row["tag_id"]
+        for row in connection.execute(
+            f"""
+            SELECT DISTINCT tag_id
+            FROM memory_edge_tags
+            WHERE edge_id IN ({_placeholders_from_ids(clean_ids)})
+            """,
+            clean_ids,
+        ).fetchall()
+    ]
+
+
+def _is_active_orphan_node(connection: sqlite3.Connection, node_id: str) -> bool:
+    node = connection.execute(
+        """
+        SELECT id
+        FROM memory_nodes
+        WHERE id = ? AND status = 'active'
+        """,
+        (node_id,),
+    ).fetchone()
+    if node is None:
+        return False
+    edge = connection.execute(
+        """
+        SELECT id
+        FROM memory_edges
+        WHERE status = 'active'
+            AND (source_node_id = ? OR target_node_id = ?)
+        LIMIT 1
+        """,
+        (node_id, node_id),
+    ).fetchone()
+    return edge is None
+
+
+def _clear_identity_bindings(
+    connection: sqlite3.Connection,
+    node_ids: list[str],
+    now: str,
+) -> None:
+    clean_ids = _unique_texts(node_ids)
+    if not clean_ids:
+        return
+    connection.execute(
+        f"""
+        UPDATE conversation_context_identities
+        SET memory_node_id = NULL,
+            updated_at = ?
+        WHERE memory_node_id IN ({_placeholders_from_ids(clean_ids)})
+        """,
+        [now, *clean_ids],
+    )
+
+
+def _delete_orphan_tags(
+    connection: sqlite3.Connection,
+    tag_ids: set[str],
+    now: str,
+) -> None:
+    clean_ids = _unique_texts(list(tag_ids))
+    if not clean_ids:
+        return
+
+    orphan_ids = [
+        tag_id
+        for tag_id in clean_ids
+        if not _tag_has_links(connection, tag_id)
+    ]
+    if not orphan_ids:
+        return
+
+    connection.execute(
+        f"""
+        UPDATE memory_tags
+        SET status = 'deleted',
+            updated_at = ?
+        WHERE id IN ({_placeholders_from_ids(orphan_ids)})
+        """,
+        [now, *orphan_ids],
+    )
+
+
+def _tag_has_links(connection: sqlite3.Connection, tag_id: str) -> bool:
+    node_link = connection.execute(
+        """
+        SELECT node_id
+        FROM memory_node_tags
+        WHERE tag_id = ?
+        LIMIT 1
+        """,
+        (tag_id,),
+    ).fetchone()
+    if node_link is not None:
+        return True
+    edge_link = connection.execute(
+        """
+        SELECT edge_id
+        FROM memory_edge_tags
+        WHERE tag_id = ?
+        LIMIT 1
+        """,
+        (tag_id,),
+    ).fetchone()
+    return edge_link is not None
+
+
+def _placeholders_from_ids(items: list[str]) -> str:
+    return ", ".join("?" for _ in items)
+
+
+def _unique_texts(items: list[str]) -> list[str]:
+    seen = set()
+    unique_items = []
+    for item in items:
+        clean_item = _clean_text(item)
+        if not clean_item or clean_item in seen:
+            continue
+        seen.add(clean_item)
+        unique_items.append(clean_item)
+    return unique_items
 
 
 def _as_record(value: Any) -> dict[str, Any]:

@@ -771,6 +771,33 @@ pre {
   font-size: 11px;
 }
 
+.memory-delete-button {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 32px;
+  padding: 7px 10px;
+  border: 1px solid #6c2e38;
+  border-radius: 8px;
+  color: #ffd6dc;
+  background: #2a1117;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.memory-delete-button:hover:not(:disabled) {
+  border-color: #a44351;
+  background: #381720;
+}
+
+.memory-delete-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
 .memory-tooltip-card {
   display: grid;
   gap: 8px;

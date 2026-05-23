@@ -101,6 +101,7 @@ class MemoryRecallStore:
             """
             SELECT id, name, normalized_name, kind, mention_count, updated_at
             FROM memory_tags
+            WHERE status = 'active'
             ORDER BY mention_count DESC, updated_at DESC, name ASC
             """
         ).fetchall()
@@ -201,6 +202,7 @@ class MemoryRecallStore:
             JOIN memory_tags AS tag
                 ON tag.id = link.tag_id
             WHERE tag.id IN ({placeholders})
+                AND tag.status = 'active'
             """.format(placeholders=_placeholders(matched_tags)),
             [tag["id"] for tag in matched_tags],
         ).fetchall():
@@ -221,6 +223,7 @@ class MemoryRecallStore:
             JOIN memory_tags AS tag
                 ON tag.id = link.tag_id
             WHERE tag.id IN ({placeholders})
+                AND tag.status = 'active'
             """.format(placeholders=_placeholders(matched_tags)),
             [tag["id"] for tag in matched_tags],
         ).fetchall():
@@ -327,6 +330,7 @@ class MemoryRecallStore:
                 JOIN memory_tags AS tag
                     ON tag.id = link.tag_id
                 WHERE link.node_id IN ({placeholders})
+                    AND tag.status = 'active'
                 ORDER BY link.mention_count DESC, tag.name ASC
                 """.format(placeholders=_placeholders_from_ids(node_scores)),
                 list(node_scores.keys()),
@@ -413,6 +417,7 @@ class MemoryRecallStore:
                 JOIN memory_tags AS tag
                     ON tag.id = link.tag_id
                 WHERE link.edge_id IN ({placeholders})
+                    AND tag.status = 'active'
                 ORDER BY link.mention_count DESC, tag.name ASC
                 """.format(placeholders=_placeholders_from_ids(edge_scores)),
                 list(edge_scores.keys()),

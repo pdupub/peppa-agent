@@ -36,6 +36,18 @@ export function fetchMemoryGraph(): Promise<MemoryGraphResponse> {
   return requestJson<MemoryGraphResponse>('/api/memory/graph');
 }
 
+export function deleteMemoryGraphNode(nodeId: string): Promise<MemoryGraphResponse> {
+  return requestJson<MemoryGraphResponse>(`/api/memory/graph/nodes/${encodeURIComponent(nodeId)}`, {
+    method: 'DELETE'
+  });
+}
+
+export function deleteMemoryGraphEdge(edgeId: string): Promise<MemoryGraphResponse> {
+  return requestJson<MemoryGraphResponse>(`/api/memory/graph/edges/${encodeURIComponent(edgeId)}`, {
+    method: 'DELETE'
+  });
+}
+
 export function recallMemory(params: {
   message: string;
   conversationId?: string;

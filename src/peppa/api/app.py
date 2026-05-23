@@ -187,6 +187,18 @@ def create_app() -> FastAPI:
     async def memory_graph() -> dict[str, Any]:
         return memory_graph_store.get_memory_graph()
 
+    @app.delete("/api/memory/graph/nodes/{node_id}")
+    async def delete_memory_node(node_id: str) -> dict[str, Any]:
+        if not memory_graph_store.delete_node(node_id):
+            raise HTTPException(status_code=404, detail="Memory node not found.")
+        return memory_graph_store.get_memory_graph()
+
+    @app.delete("/api/memory/graph/edges/{edge_id}")
+    async def delete_memory_edge(edge_id: str) -> dict[str, Any]:
+        if not memory_graph_store.delete_edge(edge_id):
+            raise HTTPException(status_code=404, detail="Memory edge not found.")
+        return memory_graph_store.get_memory_graph()
+
     @app.get("/api/identity/context")
     async def identity_context() -> dict[str, Any]:
         identity = identity_store.get_or_create_identity(
