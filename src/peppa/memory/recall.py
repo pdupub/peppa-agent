@@ -527,13 +527,13 @@ class MemoryRecallStore:
 
         seen = set()
         unique = []
+        evidence.sort(key=lambda item: (-float(item["confidence"]), item["created_at"]))
         for item in evidence:
-            marker = (item["owner_type"], item["owner_id"], item["source_trace_id"])
+            marker = item["source_trace_id"]
             if marker in seen:
                 continue
             seen.add(marker)
             unique.append(item)
-        unique.sort(key=lambda item: (-float(item["confidence"]), item["created_at"]), reverse=False)
         return unique[:MAX_EVIDENCE_ITEMS]
 
     def _connect(self) -> sqlite3.Connection:
@@ -565,9 +565,7 @@ def _build_useful_background(
     if not matched_tags:
         return []
 
-    tag_names = "、".join(tag["name"] for tag in matched_tags[:6])
-    background = [f"当前输入命中了这些本地记忆 tag：{tag_names}。"]
-
+    background = []
     if nodes:
         node_titles = "、".join(node["title"] for node in nodes[:5])
         background.append(f"相关实体包括：{node_titles}。")
@@ -598,39 +596,47 @@ def _render_context_text(
     if not matched_tags and not nodes and not edges:
         return ""
 
-    lines = ["[Relevant Memory]", ""]
-    lines.append("Matched Tags:")
-    for tag in matched_tags[:10]:
-        lines.append(f"- {tag['name']} ({tag['kind']}): {tag['matched_reason']}")
+    sections = ["Relevant Memory."]
 
     if nodes:
-        lines.extend(["", "Entities:"])
+        node_items = []
         for node in nodes:
-            tag_names = "、".join(tag["name"] for tag in node["tags"][:5])
-            suffix = f" Tags: {tag_names}." if tag_names else ""
-            lines.append(f"- {node['title']} ({node['type']}): {node['summary']}{suffix}")
+            node_items.append(
+                f"{_inline_text(node['title'])} ({_inline_text(node['type'])}): "
+                f"{_inline_text(node['summary'])}"
+            )
+        sections.append(f"Entities: {'; '.join(node_items)}.")
 
     if edges:
-        lines.extend(["", "Relationships:"])
+        edge_items = []
         for edge in edges:
-            lines.append(
-                "- "
-                f"{edge['source_title']} -> {edge['relation_type']} -> {edge['target_title']}: "
-                f"{edge['summary']}"
+            edge_items.append(
+                f"{_inline_text(edge['source_title'])} -> "
+                f"{_inline_text(edge['relation_type'])} -> "
+                f"{_inline_text(edge['target_title'])}: {_inline_text(edge['summary'])}"
             )
+        sections.append(f"Relationships: {'; '.join(edge_items)}.")
 
     if useful_background:
-        lines.extend(["", "Useful Background:"])
-        for item in useful_background:
-            lines.append(f"- {item}")
+        background_items = [_inline_text(item) for item in useful_background if _inline_text(item)]
+        if background_items:
+            sections.append(f"Useful Background: {' '.join(background_items)}")
 
     if evidence:
-        lines.extend(["", "Evidence:"])
+        evidence_items = []
         for item in evidence[:MAX_EVIDENCE_ITEMS]:
-            quote = f": {item['source_quote']}" if item.get("source_quote") else ""
-            lines.append(f"- {item['source_trace_id']} ({item['owner_title']}){quote}")
+            quote = _inline_text(item.get("source_quote"))
+            owner_title = _inline_text(item["owner_title"])
+            if quote and owner_title:
+                evidence_items.append(f"{owner_title}: {quote}")
+            elif quote:
+                evidence_items.append(quote)
+            elif owner_title:
+                evidence_items.append(owner_title)
+        if evidence_items:
+            sections.append(f"Evidence: {'; '.join(_unique_texts(evidence_items))}.")
 
-    return "\n".join(lines)
+    return " ".join(_inline_text(section) for section in sections if _inline_text(section))
 
 
 def _tag_score(row: sqlite3.Row) -> float:
@@ -685,6 +691,10 @@ def _unique_texts(items: list[str]) -> list[str]:
         seen.add(item)
         unique.append(item)
     return unique
+
+
+def _inline_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", _clean_text(value))
 
 
 def _evidence_matches_tags(
