@@ -36,7 +36,7 @@ tags
 assistant_message
 ```
 
-其中 `assistant_message` 是本轮给用户看的正常回复正文。它不写入 `topic_boundaries` 的结构化列，但会保留在 raw tool arguments 中。
+其中 `assistant_message` 是本轮给用户看的正常回复正文。它应该只回应本轮新话题相关内容，不应因为上下文或记忆背景存在其他信息而回应旧话题。它不写入 `topic_boundaries` 的结构化列，但会保留在 raw tool arguments 中。
 
 `topic_title`、`reason`、`confidence` 和 `tags` 会写入 `topic_boundaries` 表，供后续会话分段、记忆抽取范围和 recall 使用。聊天 trace 仍然保留原始 request / response，必要时可以从 response payload 审计模型是否发起了 tool call。
 

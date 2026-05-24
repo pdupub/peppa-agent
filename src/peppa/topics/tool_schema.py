@@ -42,7 +42,8 @@ TOPIC_BOUNDARY_TOOL: dict[str, Any] = {
                     "type": "string",
                     "description": (
                         "本轮应该展示给用户的完整正常回复正文。调用该工具时必须填写，"
-                        "内容应和 assistant content 中的可见回复一致，不要提及工具调用。"
+                        "内容应和 assistant content 中的可见回复一致，只回应本轮新话题相关内容，"
+                        "不要因为上下文或记忆背景中存在其他信息而回应旧话题，不要提及工具调用。"
                     ),
                 },
             },
