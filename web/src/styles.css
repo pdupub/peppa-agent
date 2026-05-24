@@ -456,6 +456,17 @@ h2 {
   background: #12201f;
 }
 
+.trace-row.auto-memory-extracted {
+  border-color: #314b48;
+  background: #14201f;
+}
+
+.trace-row.auto-memory-extracted:hover,
+.trace-row.auto-memory-extracted.active {
+  border-color: #4b7d70;
+  background: #17312b;
+}
+
 .trace-model,
 .trace-state {
   font-size: 11px;

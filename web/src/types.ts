@@ -22,6 +22,7 @@ export type TraceRecord = {
   duration_ms: number | null;
   error: string | null;
   created_at: string;
+  auto_memory_extracted?: boolean;
 };
 
 export type ChatResponse = {

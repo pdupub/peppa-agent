@@ -522,8 +522,18 @@ function App() {
 
                 {visibleTraces.map((trace) => {
                   const isDisabled = isToolCallTrace(trace);
+                  const traceItemClassName = ['trace-item', isDisabled ? 'disabled' : '']
+                    .filter(Boolean)
+                    .join(' ');
+                  const traceRowClassName = [
+                    'trace-row',
+                    trace.id === activeTrace?.id ? 'active' : '',
+                    trace.auto_memory_extracted ? 'auto-memory-extracted' : ''
+                  ]
+                    .filter(Boolean)
+                    .join(' ');
                   return (
-                    <div className={isDisabled ? 'trace-item disabled' : 'trace-item'} key={trace.id}>
+                    <div className={traceItemClassName} key={trace.id}>
                       <input
                         type="checkbox"
                         checked={selectedTraceIds.has(trace.id)}
@@ -532,7 +542,7 @@ function App() {
                         onChange={(event) => handleTraceSelection(trace, event.currentTarget.checked)}
                       />
                       <button
-                        className={trace.id === activeTrace?.id ? 'trace-row active' : 'trace-row'}
+                        className={traceRowClassName}
                         type="button"
                         onClick={() => setActiveTrace(trace)}
                       >

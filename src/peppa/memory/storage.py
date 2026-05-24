@@ -248,8 +248,52 @@ class Storage:
             ).fetchall()
         return [_trace_from_row(row) for row in rows]
 
+    def list_traces_after(self, created_at: str | None) -> list[TraceRecord]:
+        with self._connect() as connection:
+            if created_at:
+                rows = connection.execute(
+                    """
+                    SELECT *
+                    FROM traces
+                    WHERE created_at > ?
+                    ORDER BY created_at ASC
+                    """,
+                    (created_at,),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT *
+                    FROM traces
+                    ORDER BY created_at ASC
+                    """
+                ).fetchall()
+        return [_trace_from_row(row) for row in rows]
+
     def get_trace(self, trace_id: str) -> TraceRecord | None:
         with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM traces
+                WHERE id = ?
+                """,
+                (trace_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return _trace_from_row(row)
+
+    def update_trace_error(self, trace_id: str, error: str) -> TraceRecord | None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE traces
+                SET error = ?
+                WHERE id = ?
+                """,
+                (error, trace_id),
+            )
             row = connection.execute(
                 """
                 SELECT *

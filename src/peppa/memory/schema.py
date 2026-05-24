@@ -86,6 +86,16 @@ def ensure_memory_graph_schema(connection: sqlite3.Connection) -> None:
             FOREIGN KEY (extraction_trace_id) REFERENCES traces(id)
         );
 
+        CREATE TABLE IF NOT EXISTS memory_auto_extraction_state (
+            id TEXT PRIMARY KEY,
+            last_source_trace_id TEXT,
+            last_source_trace_created_at TEXT,
+            last_extraction_trace_id TEXT,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (last_source_trace_id) REFERENCES traces(id),
+            FOREIGN KEY (last_extraction_trace_id) REFERENCES traces(id)
+        );
+
         CREATE TABLE IF NOT EXISTS memory_segments (
             id TEXT PRIMARY KEY,
             run_id TEXT NOT NULL,
@@ -201,6 +211,7 @@ def ensure_memory_graph_schema(connection: sqlite3.Connection) -> None:
 
 
 MEMORY_TABLE_DELETE_ORDER = (
+    "memory_auto_extraction_state",
     "memory_edge_tags",
     "memory_node_tags",
     "memory_document_suggestions",

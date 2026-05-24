@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
 from typing import Any
+import asyncio
 import json
 
 from fastapi import FastAPI, HTTPException
@@ -12,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from peppa import __version__
-from peppa.config import ConfigError, load_settings
+from peppa.config import ConfigError, ModelSettings, load_settings
 from peppa.core import Agent, MAX_PROMPT_HISTORY_MESSAGES
 from peppa.identity import (
     IDENTITY_TOOL_NAME,
@@ -21,9 +23,14 @@ from peppa.identity import (
     identity_update_tools,
 )
 from peppa.memory import (
+    AUTO_MEMORY_EXTRACTION_TURN_THRESHOLD,
+    MEMORY_TOOL_NAME,
+    MemoryAutoExtractionState,
+    MemoryAutoExtractionStore,
     MemoryGraphStore,
     MemoryRecallStore,
     Storage,
+    TraceRecord,
     memory_graph_update_tools,
     memory_tool_choice,
 )
@@ -86,6 +93,13 @@ class IdentityExtractionResponse(BaseModel):
     identity: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class MemoryExtractionRunResult:
+    trace: TraceRecord
+    source_traces: list[TraceRecord]
+    success: bool
+
+
 WEB_IDENTITY_CHANNEL = "web"
 WEB_IDENTITY_INSTANCE = "default"
 
@@ -96,8 +110,11 @@ def create_app() -> FastAPI:
     storage.initialize()
     memory_graph_store = MemoryGraphStore()
     memory_recall_store = MemoryRecallStore()
+    memory_auto_extraction_store = MemoryAutoExtractionStore()
+    memory_auto_extraction_store.initialize()
     identity_store = ConversationIdentityStore()
     identity_store.initialize()
+    auto_memory_extraction_task: asyncio.Task[None] | None = None
 
     app = FastAPI(title="Peppa", version=__version__)
     app.add_middleware(
@@ -128,8 +145,10 @@ def create_app() -> FastAPI:
 
     @app.post("/api/chat", response_model=ChatResponse)
     async def chat(request: ChatRequest) -> ChatResponse:
+        nonlocal auto_memory_extraction_task
         try:
             settings = load_settings()
+            model_settings = settings.get_model(request.model)
             agent = Agent(
                 settings=settings,
                 storage=storage,
@@ -150,7 +169,27 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        return ChatResponse(**result.public_dict())
+        if result.trace.error is None and (
+            auto_memory_extraction_task is None or auto_memory_extraction_task.done()
+        ):
+            auto_memory_extraction_task = asyncio.create_task(
+                _run_auto_memory_extraction(
+                    storage=storage,
+                    memory_graph_store=memory_graph_store,
+                    identity_store=identity_store,
+                    memory_auto_extraction_store=memory_auto_extraction_store,
+                    current_trace_id=result.trace.id,
+                    model_settings=model_settings,
+                    temperature=request.temperature,
+                )
+            )
+            auto_memory_extraction_task.add_done_callback(_consume_background_task_result)
+
+        state = memory_auto_extraction_store.get_state()
+        return ChatResponse(
+            conversation_id=result.conversation_id,
+            trace=_trace_payload_with_auto_memory_marker(result.trace, state),
+        )
 
     @app.post("/api/memory/recall", response_model=MemoryRecallResponse)
     async def recall_memory(request: MemoryRecallRequest) -> MemoryRecallResponse:
@@ -172,8 +211,12 @@ def create_app() -> FastAPI:
 
     @app.get("/api/traces")
     async def traces(limit: int = 25) -> dict[str, Any]:
+        state = memory_auto_extraction_store.get_state()
         return {
-            "traces": [trace.public_dict() for trace in storage.list_traces(limit=limit)],
+            "traces": [
+                _trace_payload_with_auto_memory_marker(trace, state)
+                for trace in storage.list_traces(limit=limit)
+            ],
         }
 
     @app.get("/api/traces/{trace_id}")
@@ -181,7 +224,10 @@ def create_app() -> FastAPI:
         record = storage.get_trace(trace_id)
         if record is None:
             raise HTTPException(status_code=404, detail="Trace not found.")
-        return record.public_dict()
+        return _trace_payload_with_auto_memory_marker(
+            record,
+            memory_auto_extraction_store.get_state(),
+        )
 
     @app.get("/api/memory/graph")
     async def memory_graph() -> dict[str, Any]:
@@ -321,89 +367,262 @@ def create_app() -> FastAPI:
         except ConfigError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-        selected_traces = []
-        for trace_id in request.trace_ids:
-            record = storage.get_trace(trace_id)
-            if record is None:
-                raise HTTPException(status_code=404, detail=f"Trace not found: {trace_id}")
-            if _is_tool_call_trace(record.public_dict()):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Memory extraction traces cannot be used as input: {trace_id}",
-                )
-            selected_traces.append(record)
+        result = await _run_memory_extraction(
+            storage=storage,
+            memory_graph_store=memory_graph_store,
+            identity_store=identity_store,
+            source_traces=_load_memory_source_traces(storage, request.trace_ids),
+            model_settings=model_settings,
+            temperature=request.temperature,
+            mode="manual",
+        )
 
-        selected_traces.sort(key=lambda item: item.created_at)
-        current_identity = identity_store.get_or_create_identity(
-            channel=WEB_IDENTITY_CHANNEL,
-            channel_instance=WEB_IDENTITY_INSTANCE,
+        return MemoryExtractionResponse(trace=result.trace.public_dict())
+
+    mount_web_app(app, WEB_DIST_DIR)
+    return app
+
+
+async def _run_auto_memory_extraction(
+    *,
+    storage: Storage,
+    memory_graph_store: MemoryGraphStore,
+    identity_store: ConversationIdentityStore,
+    memory_auto_extraction_store: MemoryAutoExtractionStore,
+    current_trace_id: str,
+    model_settings: ModelSettings,
+    temperature: float,
+) -> None:
+    try:
+        state = memory_auto_extraction_store.get_state()
+        pending_traces = [
+            trace
+            for trace in storage.list_traces_after(
+                state.last_source_trace_created_at if state else None
+            )
+            if _is_ordinary_chat_trace(trace)
+        ]
+        if not pending_traces:
+            return
+
+        current_trace = next(
+            (trace for trace in pending_traces if trace.id == current_trace_id),
+            None,
         )
-        prompt_messages = _build_memory_extraction_messages(
-            source_traces=[trace.public_dict() for trace in selected_traces],
-            current_user_identity=current_identity.current_user_identity,
+        if current_trace is None:
+            return
+
+        trigger = _auto_memory_extraction_trigger(
+            pending_traces=pending_traces,
+            current_trace=current_trace,
         )
-        tools = memory_graph_update_tools()
-        tool_choice = memory_tool_choice()
-        model_client = ModelClient()
-        request_payload = model_client.build_request_payload(
+        if trigger is None:
+            return
+
+        result = await _run_memory_extraction(
+            storage=storage,
+            memory_graph_store=memory_graph_store,
+            identity_store=identity_store,
+            source_traces=pending_traces,
+            model_settings=model_settings,
+            temperature=temperature,
+            mode="auto",
+            trigger=trigger,
+        )
+        if result.success:
+            memory_auto_extraction_store.mark_extracted(
+                last_source_trace=result.source_traces[-1],
+                extraction_trace_id=result.trace.id,
+            )
+    except Exception:
+        return
+
+
+async def _run_memory_extraction(
+    *,
+    storage: Storage,
+    memory_graph_store: MemoryGraphStore,
+    identity_store: ConversationIdentityStore,
+    source_traces: list[TraceRecord],
+    model_settings: ModelSettings,
+    temperature: float,
+    mode: str,
+    trigger: str | None = None,
+) -> MemoryExtractionRunResult:
+    selected_traces = sorted(source_traces, key=lambda item: item.created_at)
+    current_identity = identity_store.get_or_create_identity(
+        channel=WEB_IDENTITY_CHANNEL,
+        channel_instance=WEB_IDENTITY_INSTANCE,
+    )
+    prompt_messages = _build_memory_extraction_messages(
+        source_traces=[trace.public_dict() for trace in selected_traces],
+        current_user_identity=current_identity.current_user_identity,
+    )
+    tools = memory_graph_update_tools()
+    tool_choice = memory_tool_choice()
+    model_client = ModelClient()
+    request_payload = model_client.build_request_payload(
+        model_settings=model_settings,
+        messages=prompt_messages,
+        tools=tools,
+        tool_choice=tool_choice,
+        temperature=temperature,
+    )
+    source_trace_ids = [trace.id for trace in selected_traces]
+    request_payload["_peppa"] = {
+        "kind": "memory_extraction",
+        "mode": mode,
+        "source_trace_ids": source_trace_ids,
+        "source_trace_order": source_trace_ids,
+        "current_user_identity": current_identity.current_user_identity,
+        "current_user_memory_node_id": current_identity.memory_node_id,
+    }
+    if trigger:
+        request_payload["_peppa"]["trigger"] = trigger
+
+    response_payload: dict[str, Any] | None = None
+    response_tool_calls = []
+    assistant_message: str | None = None
+    error: str | None = None
+    started_at = perf_counter()
+    try:
+        response = await model_client.chat(
             model_settings=model_settings,
             messages=prompt_messages,
             tools=tools,
             tool_choice=tool_choice,
-            temperature=request.temperature,
+            temperature=temperature,
         )
-        request_payload["_peppa"] = {
-            "kind": "memory_extraction",
-            "source_trace_ids": request.trace_ids,
-            "source_trace_order": [trace.id for trace in selected_traces],
-            "current_user_identity": current_identity.current_user_identity,
-            "current_user_memory_node_id": current_identity.memory_node_id,
-        }
+        response_payload = response.response_payload
+        response_tool_calls = response.tool_calls
+        assistant_message = response.content
+    except Exception as exc:
+        error = str(exc)
 
-        response_payload: dict[str, Any] | None = None
-        response_tool_calls = []
-        assistant_message: str | None = None
-        error: str | None = None
-        started_at = perf_counter()
+    conversation_id = storage.create_conversation("Memory extraction")
+    duration_ms = int((perf_counter() - started_at) * 1000)
+    trace = storage.create_trace(
+        conversation_id=conversation_id,
+        model=model_settings.model,
+        user_message=f"Memory extraction from {len(selected_traces)} trace(s)",
+        assistant_message=assistant_message,
+        prompt_messages=prompt_messages,
+        request_payload=request_payload,
+        response_payload=response_payload,
+        duration_ms=duration_ms,
+        error=error,
+    )
+
+    success = error is None
+    if response_payload is not None and success:
+        followup_errors = []
         try:
-            response = await model_client.chat(
-                model_settings=model_settings,
-                messages=prompt_messages,
-                tools=tools,
-                tool_choice=tool_choice,
-                temperature=request.temperature,
-            )
-            response_payload = response.response_payload
-            response_tool_calls = response.tool_calls
-            assistant_message = response.content
-        except Exception as exc:
-            error = str(exc)
-
-        conversation_id = storage.create_conversation("Memory extraction")
-        duration_ms = int((perf_counter() - started_at) * 1000)
-        trace = storage.create_trace(
-            conversation_id=conversation_id,
-            model=model_settings.model,
-            user_message=f"Memory extraction from {len(selected_traces)} trace(s)",
-            assistant_message=assistant_message,
-            prompt_messages=prompt_messages,
-            request_payload=request_payload,
-            response_payload=response_payload,
-            duration_ms=duration_ms,
-            error=error,
-        )
-        if response_payload is not None:
-            memory_graph_store.record_tool_calls(
+            await asyncio.to_thread(
+                memory_graph_store.record_tool_calls,
                 extraction_trace_id=trace.id,
                 model=model_settings.model,
                 tool_calls=response_tool_calls,
-                source_trace_ids=[source_trace.id for source_trace in selected_traces],
+                source_trace_ids=source_trace_ids,
             )
+        except Exception as exc:
+            followup_errors.append(str(exc))
+        followup_errors.extend(_memory_tool_call_errors(response_tool_calls))
+        if followup_errors:
+            success = False
+            updated_trace = storage.update_trace_error(trace.id, "; ".join(followup_errors))
+            if updated_trace is not None:
+                trace = updated_trace
 
-        return MemoryExtractionResponse(trace=trace.public_dict())
+    return MemoryExtractionRunResult(
+        trace=trace,
+        source_traces=selected_traces,
+        success=success,
+    )
 
-    mount_web_app(app, WEB_DIST_DIR)
-    return app
+
+def _load_memory_source_traces(storage: Storage, trace_ids: list[str]) -> list[TraceRecord]:
+    selected_traces = []
+    for trace_id in trace_ids:
+        record = storage.get_trace(trace_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail=f"Trace not found: {trace_id}")
+        if _is_tool_call_trace(record.public_dict()):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Memory extraction traces cannot be used as input: {trace_id}",
+            )
+        selected_traces.append(record)
+    return selected_traces
+
+
+def _auto_memory_extraction_trigger(
+    *,
+    pending_traces: list[TraceRecord],
+    current_trace: TraceRecord,
+) -> str | None:
+    if _has_topic_boundary_tool_call(current_trace.public_dict()):
+        return "topic_boundary"
+    if len(pending_traces) >= AUTO_MEMORY_EXTRACTION_TURN_THRESHOLD:
+        return "turn_count"
+    return None
+
+
+def _trace_payload_with_auto_memory_marker(
+    trace: TraceRecord,
+    state: MemoryAutoExtractionState | None,
+) -> dict[str, Any]:
+    payload = trace.public_dict()
+    cutoff = state.last_source_trace_created_at if state else None
+    payload["auto_memory_extracted"] = bool(
+        cutoff and trace.created_at <= cutoff and _is_ordinary_chat_trace(trace)
+    )
+    return payload
+
+
+def _is_ordinary_chat_trace(trace: TraceRecord) -> bool:
+    payload = trace.public_dict()
+    if _is_tool_call_trace(payload):
+        return False
+    request_meta = payload.get("request_payload", {}).get("_peppa")
+    if isinstance(request_meta, dict) and request_meta.get("kind") not in {None, "chat"}:
+        return False
+    return True
+
+
+def _has_topic_boundary_tool_call(trace: dict[str, Any]) -> bool:
+    response_payload = trace.get("response_payload")
+    if not isinstance(response_payload, dict):
+        return False
+    choices = response_payload.get("choices")
+    if not isinstance(choices, list):
+        return False
+    for choice in choices:
+        if not isinstance(choice, dict) or not isinstance(choice.get("message"), dict):
+            continue
+        tool_calls = choice["message"].get("tool_calls")
+        if not isinstance(tool_calls, list):
+            continue
+        for tool_call in tool_calls:
+            if _tool_call_name(tool_call) == TOPIC_BOUNDARY_TOOL_NAME:
+                return True
+    return False
+
+
+def _memory_tool_call_errors(tool_calls: list[Any]) -> list[str]:
+    errors = []
+    for tool_call in tool_calls:
+        if tool_call.name != MEMORY_TOOL_NAME:
+            continue
+        if tool_call.parse_error or tool_call.arguments is None:
+            errors.append(tool_call.parse_error or "Memory tool call arguments are missing.")
+    return errors
+
+
+def _consume_background_task_result(task: asyncio.Task[None]) -> None:
+    try:
+        task.result()
+    except Exception:
+        return
 
 
 def _apply_identity_tool_calls(
