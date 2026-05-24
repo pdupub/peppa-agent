@@ -261,14 +261,12 @@ class MemoryRecallStore:
             [*node_scores.keys(), *node_scores.keys()],
         ).fetchall()
         for row in rows:
-            if (
-                row["source_node_id"] not in node_scores
-                or row["target_node_id"] not in node_scores
-            ):
-                continue
             source_score = node_scores.get(row["source_node_id"], 0.0)
             target_score = node_scores.get(row["target_node_id"], 0.0)
             anchor_score = max(source_score, target_score)
+            if anchor_score <= 0:
+                continue
+
             score = anchor_score * 0.45 + 3 * _confidence(row["confidence"])
             score += min(2.0, float(row["mention_count"]) * 0.25)
             edge_scores[row["id"]] = max(edge_scores.get(row["id"], 0.0), score)

@@ -10,8 +10,13 @@ import uuid
 
 from peppa.paths import DATABASE_PATH, ensure_runtime_dirs
 from peppa.identity import ensure_identity_schema
-from peppa.memory.graph import ensure_memory_graph_schema
+from peppa.memory.schema import ensure_memory_graph_schema
 from peppa.topics import ensure_topic_boundary_schema
+
+
+# Deprecated compatibility value for the old traces.memory_json column.
+# Recall metadata now lives in request_payload["_peppa"]["memory_recall"].
+DEPRECATED_TRACE_MEMORY_JSON = "null"
 
 
 @dataclass(frozen=True)
@@ -217,7 +222,7 @@ class Storage:
                     trace.user_message,
                     trace.assistant_message,
                     json.dumps(trace.prompt_messages, ensure_ascii=False),
-                    json.dumps([], ensure_ascii=False),
+                    DEPRECATED_TRACE_MEMORY_JSON,
                     json.dumps(trace.request_payload, ensure_ascii=False),
                     json.dumps(trace.response_payload, ensure_ascii=False)
                     if trace.response_payload is not None

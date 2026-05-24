@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -10,6 +9,8 @@ import sqlite3
 import uuid
 
 from peppa.identity import ensure_identity_schema
+from peppa.memory.normalization import normalize_memory_graph_arguments
+from peppa.memory.schema import MEMORY_TABLE_DELETE_ORDER, ensure_memory_graph_schema
 from peppa.memory.tool_schema import (
     DOCUMENT_TYPES,
     EDGE_RELATION_TYPES,
@@ -21,218 +22,6 @@ from peppa.memory.tool_schema import (
 )
 from peppa.models.tool_calls import ToolCall
 from peppa.paths import DATABASE_PATH
-
-
-def ensure_memory_graph_schema(connection: sqlite3.Connection) -> None:
-    connection.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS memory_nodes (
-            id TEXT PRIMARY KEY,
-            type TEXT NOT NULL,
-            title TEXT NOT NULL,
-            normalized_title TEXT NOT NULL,
-            summary TEXT NOT NULL,
-            confidence REAL NOT NULL,
-            status TEXT NOT NULL,
-            mention_count INTEGER NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            UNIQUE(type, normalized_title)
-        );
-
-        CREATE TABLE IF NOT EXISTS memory_edges (
-            id TEXT PRIMARY KEY,
-            source_node_id TEXT NOT NULL,
-            target_node_id TEXT NOT NULL,
-            relation_type TEXT NOT NULL,
-            summary TEXT NOT NULL,
-            confidence REAL NOT NULL,
-            status TEXT NOT NULL,
-            mention_count INTEGER NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            UNIQUE(source_node_id, target_node_id, relation_type),
-            FOREIGN KEY (source_node_id) REFERENCES memory_nodes(id),
-            FOREIGN KEY (target_node_id) REFERENCES memory_nodes(id)
-        );
-
-        CREATE TABLE IF NOT EXISTS memory_tags (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            normalized_name TEXT NOT NULL UNIQUE,
-            kind TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'active',
-            mention_count INTEGER NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS memory_node_tags (
-            node_id TEXT NOT NULL,
-            tag_id TEXT NOT NULL,
-            confidence REAL NOT NULL,
-            reason TEXT NOT NULL,
-            mention_count INTEGER NOT NULL,
-            first_seen_at TEXT NOT NULL,
-            last_seen_at TEXT NOT NULL,
-            PRIMARY KEY (node_id, tag_id),
-            FOREIGN KEY (node_id) REFERENCES memory_nodes(id),
-            FOREIGN KEY (tag_id) REFERENCES memory_tags(id)
-        );
-
-        CREATE TABLE IF NOT EXISTS memory_edge_tags (
-            edge_id TEXT NOT NULL,
-            tag_id TEXT NOT NULL,
-            confidence REAL NOT NULL,
-            reason TEXT NOT NULL,
-            mention_count INTEGER NOT NULL,
-            first_seen_at TEXT NOT NULL,
-            last_seen_at TEXT NOT NULL,
-            PRIMARY KEY (edge_id, tag_id),
-            FOREIGN KEY (edge_id) REFERENCES memory_edges(id),
-            FOREIGN KEY (tag_id) REFERENCES memory_tags(id)
-        );
-
-        CREATE TABLE IF NOT EXISTS memory_extraction_runs (
-            id TEXT PRIMARY KEY,
-            extraction_trace_id TEXT NOT NULL,
-            model TEXT NOT NULL,
-            tool_call_id TEXT,
-            source_trace_ids_json TEXT NOT NULL,
-            raw_arguments_json TEXT NOT NULL,
-            status TEXT NOT NULL,
-            error TEXT,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (extraction_trace_id) REFERENCES traces(id)
-        );
-
-        CREATE TABLE IF NOT EXISTS memory_segments (
-            id TEXT PRIMARY KEY,
-            run_id TEXT NOT NULL,
-            source_trace_id TEXT,
-            text TEXT NOT NULL,
-            category TEXT NOT NULL,
-            retention TEXT NOT NULL,
-            reason TEXT NOT NULL,
-            confidence REAL NOT NULL,
-            status TEXT NOT NULL,
-            raw_json TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (run_id) REFERENCES memory_extraction_runs(id)
-        );
-
-        CREATE TABLE IF NOT EXISTS memory_tag_observations (
-            id TEXT PRIMARY KEY,
-            run_id TEXT NOT NULL,
-            tag_id TEXT,
-            name TEXT NOT NULL,
-            normalized_name TEXT NOT NULL,
-            kind TEXT NOT NULL,
-            confidence REAL NOT NULL,
-            reason TEXT NOT NULL,
-            action TEXT NOT NULL,
-            raw_json TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (run_id) REFERENCES memory_extraction_runs(id),
-            FOREIGN KEY (tag_id) REFERENCES memory_tags(id)
-        );
-
-        CREATE TABLE IF NOT EXISTS memory_node_observations (
-            id TEXT PRIMARY KEY,
-            run_id TEXT NOT NULL,
-            candidate_ref TEXT,
-            resolved_node_id TEXT,
-            action TEXT NOT NULL,
-            source_trace_id TEXT,
-            type TEXT NOT NULL,
-            title TEXT NOT NULL,
-            normalized_title TEXT NOT NULL,
-            summary TEXT NOT NULL,
-            source_quote TEXT NOT NULL,
-            confidence REAL NOT NULL,
-            raw_json TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (run_id) REFERENCES memory_extraction_runs(id),
-            FOREIGN KEY (resolved_node_id) REFERENCES memory_nodes(id)
-        );
-
-        CREATE TABLE IF NOT EXISTS memory_edge_observations (
-            id TEXT PRIMARY KEY,
-            run_id TEXT NOT NULL,
-            resolved_edge_id TEXT,
-            action TEXT NOT NULL,
-            source_trace_id TEXT,
-            source_ref TEXT NOT NULL,
-            target_ref TEXT NOT NULL,
-            source_node_id TEXT,
-            target_node_id TEXT,
-            relation_type TEXT NOT NULL,
-            summary TEXT NOT NULL,
-            source_quote TEXT NOT NULL,
-            confidence REAL NOT NULL,
-            raw_json TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (run_id) REFERENCES memory_extraction_runs(id),
-            FOREIGN KEY (resolved_edge_id) REFERENCES memory_edges(id),
-            FOREIGN KEY (source_node_id) REFERENCES memory_nodes(id),
-            FOREIGN KEY (target_node_id) REFERENCES memory_nodes(id)
-        );
-
-        CREATE TABLE IF NOT EXISTS memory_document_suggestions (
-            id TEXT PRIMARY KEY,
-            run_id TEXT NOT NULL,
-            source_trace_id TEXT,
-            project TEXT NOT NULL,
-            document_type TEXT NOT NULL,
-            title TEXT NOT NULL,
-            summary TEXT NOT NULL,
-            source_quote TEXT NOT NULL,
-            tags_json TEXT NOT NULL,
-            confidence REAL NOT NULL,
-            reason TEXT NOT NULL,
-            status TEXT NOT NULL,
-            raw_json TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (run_id) REFERENCES memory_extraction_runs(id)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_memory_nodes_title
-            ON memory_nodes(type, normalized_title);
-
-        CREATE INDEX IF NOT EXISTS idx_memory_edges_nodes
-            ON memory_edges(source_node_id, target_node_id);
-
-        CREATE INDEX IF NOT EXISTS idx_memory_tags_name
-            ON memory_tags(normalized_name);
-
-        CREATE INDEX IF NOT EXISTS idx_memory_node_observations_node
-            ON memory_node_observations(resolved_node_id);
-
-        CREATE INDEX IF NOT EXISTS idx_memory_edge_observations_edge
-            ON memory_edge_observations(resolved_edge_id);
-        """
-    )
-    _ensure_column(
-        connection,
-        table_name="memory_tags",
-        column_name="status",
-        column_definition="TEXT NOT NULL DEFAULT 'active'",
-    )
-
-
-MEMORY_TABLE_DELETE_ORDER = (
-    "memory_edge_tags",
-    "memory_node_tags",
-    "memory_document_suggestions",
-    "memory_edge_observations",
-    "memory_node_observations",
-    "memory_tag_observations",
-    "memory_segments",
-    "memory_extraction_runs",
-    "memory_edges",
-    "memory_nodes",
-    "memory_tags",
-)
 
 
 class MemoryGraphStore:
@@ -285,8 +74,7 @@ class MemoryGraphStore:
                 )
                 continue
 
-            # Comment out this line to use provider tool-call arguments exactly as returned.
-            arguments = _normalize_memory_graph_arguments(tool_call.arguments)
+            arguments = normalize_memory_graph_arguments(tool_call.arguments)
             run_ids.append(
                 self.record_memory_graph_update(
                     extraction_trace_id=extraction_trace_id,
@@ -1328,81 +1116,6 @@ class MemoryGraphStore:
         return connection
 
 
-def _normalize_memory_graph_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
-    normalized = deepcopy(arguments)
-    collected = {"tags": [], "nodes": [], "edges": []}
-    _collect_memory_graph_lists(normalized, collected)
-
-    if not any(collected.values()):
-        return normalized
-
-    memory_graph = normalized.get("memory_graph")
-    if not isinstance(memory_graph, dict):
-        memory_graph = {}
-        normalized["memory_graph"] = memory_graph
-
-    for key, items in collected.items():
-        if not items:
-            continue
-        existing_items = _as_list(memory_graph.get(key))
-        memory_graph[key] = _unique_records([*existing_items, *items])
-
-    return normalized
-
-
-def _collect_memory_graph_lists(value: Any, collected: dict[str, list[dict[str, Any]]]) -> None:
-    if isinstance(value, dict):
-        for key, item in value.items():
-            if key in collected:
-                collected[key].extend(_graph_items(key, item))
-            _collect_memory_graph_lists(item, collected)
-        return
-
-    if isinstance(value, list):
-        for item in value:
-            _collect_memory_graph_lists(item, collected)
-
-
-def _graph_items(key: str, value: Any) -> list[dict[str, Any]]:
-    return [
-        item
-        for item in _as_list(value)
-        if isinstance(item, dict) and _is_memory_graph_item(key, item)
-    ]
-
-
-def _is_memory_graph_item(key: str, item: dict[str, Any]) -> bool:
-    if key == "tags":
-        return bool(_clean_text(item.get("name")))
-    if key == "nodes":
-        return bool(
-            _clean_text(item.get("ref"))
-            and _clean_text(item.get("type"))
-            and _clean_text(item.get("title"))
-        )
-    if key == "edges":
-        return bool(
-            _clean_text(item.get("source_ref"))
-            and _clean_text(item.get("target_ref"))
-            and _clean_text(item.get("relation_type"))
-        )
-    return False
-
-
-def _unique_records(items: list[Any]) -> list[dict[str, Any]]:
-    seen = set()
-    unique_items = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        marker = _json_dumps_sorted(item)
-        if marker in seen:
-            continue
-        seen.add(marker)
-        unique_items.append(item)
-    return unique_items
-
-
 def _group_tags(rows: list[sqlite3.Row]) -> dict[str, list[dict[str, Any]]]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
@@ -1427,19 +1140,6 @@ def _group_source_trace_ids(rows: list[sqlite3.Row]) -> dict[str, list[str]]:
         source_trace_id = row["source_trace_id"]
         grouped.setdefault(owner_id, set()).add(source_trace_id)
     return {owner_id: sorted(source_ids) for owner_id, source_ids in grouped.items()}
-
-
-def _ensure_column(
-    connection: sqlite3.Connection,
-    *,
-    table_name: str,
-    column_name: str,
-    column_definition: str,
-) -> None:
-    columns = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
-    if any(row["name"] == column_name for row in columns):
-        return
-    connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}")
 
 
 def _tag_ids_for_nodes(connection: sqlite3.Connection, node_ids: list[str]) -> list[str]:
@@ -1624,10 +1324,6 @@ def _confidence(value: Any) -> float:
 
 def _json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)
-
-
-def _json_dumps_sorted(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
 
 
 def _now() -> str:
