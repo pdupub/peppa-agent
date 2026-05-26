@@ -191,6 +191,24 @@ class MemoryGraphStore:
                     """
                 ).fetchall()
             ]
+            tags = [
+                dict(row)
+                for row in connection.execute(
+                    """
+                    SELECT
+                        id,
+                        name,
+                        normalized_name,
+                        kind,
+                        mention_count,
+                        created_at,
+                        updated_at
+                    FROM memory_tags
+                    WHERE status = 'active'
+                    ORDER BY mention_count DESC, updated_at DESC, name ASC
+                    """
+                ).fetchall()
+            ]
 
             node_tags = _group_tags(
                 connection.execute(
@@ -279,6 +297,7 @@ class MemoryGraphStore:
                 }
                 for edge in edges
             ],
+            "tags": tags,
             "stats": stats,
         }
 
@@ -413,6 +432,283 @@ class MemoryGraphStore:
 
             _delete_orphan_tags(connection, affected_tag_ids, now)
 
+        return True
+
+    def update_node_summary(self, node_id: str, summary: str) -> bool:
+        clean_node_id = _clean_text(node_id)
+        if not clean_node_id:
+            return False
+
+        now = _now()
+        with self._connect() as connection:
+            ensure_memory_graph_schema(connection)
+            node = connection.execute(
+                """
+                SELECT id
+                FROM memory_nodes
+                WHERE id = ? AND status = 'active'
+                """,
+                (clean_node_id,),
+            ).fetchone()
+            if node is None:
+                return False
+            connection.execute(
+                """
+                UPDATE memory_nodes
+                SET summary = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (_clean_text(summary), now, clean_node_id),
+            )
+        return True
+
+    def update_edge_summary(self, edge_id: str, summary: str) -> bool:
+        clean_edge_id = _clean_text(edge_id)
+        if not clean_edge_id:
+            return False
+
+        now = _now()
+        with self._connect() as connection:
+            ensure_memory_graph_schema(connection)
+            edge = connection.execute(
+                """
+                SELECT id
+                FROM memory_edges
+                WHERE id = ? AND status = 'active'
+                """,
+                (clean_edge_id,),
+            ).fetchone()
+            if edge is None:
+                return False
+            connection.execute(
+                """
+                UPDATE memory_edges
+                SET summary = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (_clean_text(summary), now, clean_edge_id),
+            )
+        return True
+
+    def update_tag(self, tag_id: str, *, name: str | None = None, kind: str | None = None) -> bool:
+        clean_tag_id = _clean_text(tag_id)
+        if not clean_tag_id:
+            return False
+
+        clean_name = None if name is None else _clean_text(name)
+        if name is not None and not clean_name:
+            raise ValueError("Tag name cannot be empty.")
+        clean_kind = None if kind is None else _enum_value(kind, TAG_KINDS, "")
+        if kind is not None and not clean_kind:
+            raise ValueError("Invalid tag kind.")
+
+        now = _now()
+        with self._connect() as connection:
+            ensure_memory_graph_schema(connection)
+            tag = connection.execute(
+                """
+                SELECT id, name, kind
+                FROM memory_tags
+                WHERE id = ? AND status = 'active'
+                """,
+                (clean_tag_id,),
+            ).fetchone()
+            if tag is None:
+                return False
+
+            next_name = clean_name if clean_name is not None else tag["name"]
+            next_kind = clean_kind if clean_kind is not None else tag["kind"]
+            conflict = connection.execute(
+                """
+                SELECT id
+                FROM memory_tags
+                WHERE normalized_name = ? AND id != ?
+                """,
+                (_tag_identity(next_name), clean_tag_id),
+            ).fetchone()
+            if conflict is not None:
+                raise ValueError("Another tag already uses this name. Merge tags instead.")
+
+            connection.execute(
+                """
+                UPDATE memory_tags
+                SET name = ?,
+                    normalized_name = ?,
+                    kind = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (next_name, _tag_identity(next_name), next_kind, now, clean_tag_id),
+            )
+        return True
+
+    def merge_tags(self, source_tag_id: str, target_tag_id: str) -> bool:
+        clean_source_id = _clean_text(source_tag_id)
+        clean_target_id = _clean_text(target_tag_id)
+        if not clean_source_id or not clean_target_id:
+            return False
+        if clean_source_id == clean_target_id:
+            raise ValueError("Cannot merge a tag into itself.")
+
+        now = _now()
+        with self._connect() as connection:
+            ensure_memory_graph_schema(connection)
+            source = _active_row_by_id(connection, "memory_tags", clean_source_id)
+            target = _active_row_by_id(connection, "memory_tags", clean_target_id)
+            if source is None or target is None:
+                return False
+
+            _merge_tag_links(
+                connection,
+                table_name="memory_node_tags",
+                owner_column="node_id",
+                source_tag_id=clean_source_id,
+                target_tag_id=clean_target_id,
+                now=now,
+            )
+            _merge_tag_links(
+                connection,
+                table_name="memory_edge_tags",
+                owner_column="edge_id",
+                source_tag_id=clean_source_id,
+                target_tag_id=clean_target_id,
+                now=now,
+            )
+            connection.execute(
+                """
+                UPDATE memory_tag_observations
+                SET tag_id = ?
+                WHERE tag_id = ?
+                """,
+                (clean_target_id, clean_source_id),
+            )
+            connection.execute(
+                """
+                UPDATE memory_tags
+                SET mention_count = mention_count + ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (int(source["mention_count"]), now, clean_target_id),
+            )
+            connection.execute(
+                """
+                UPDATE memory_tags
+                SET status = 'deleted',
+                    merged_into_tag_id = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (clean_target_id, now, clean_source_id),
+            )
+        return True
+
+    def merge_nodes(self, source_node_id: str, target_node_id: str) -> bool:
+        clean_source_id = _clean_text(source_node_id)
+        clean_target_id = _clean_text(target_node_id)
+        if not clean_source_id or not clean_target_id:
+            return False
+        if clean_source_id == clean_target_id:
+            raise ValueError("Cannot merge a node into itself.")
+
+        now = _now()
+        with self._connect() as connection:
+            ensure_memory_graph_schema(connection)
+            ensure_identity_schema(connection)
+            source = _active_row_by_id(connection, "memory_nodes", clean_source_id)
+            target = _active_row_by_id(connection, "memory_nodes", clean_target_id)
+            if source is None or target is None:
+                return False
+
+            _merge_node_tag_links(
+                connection,
+                source_node_id=clean_source_id,
+                target_node_id=clean_target_id,
+                now=now,
+            )
+            connection.execute(
+                """
+                UPDATE memory_node_observations
+                SET resolved_node_id = ?
+                WHERE resolved_node_id = ?
+                """,
+                (clean_target_id, clean_source_id),
+            )
+            connection.execute(
+                """
+                UPDATE memory_edge_observations
+                SET source_node_id = CASE WHEN source_node_id = ? THEN ? ELSE source_node_id END,
+                    target_node_id = CASE WHEN target_node_id = ? THEN ? ELSE target_node_id END
+                WHERE source_node_id = ? OR target_node_id = ?
+                """,
+                (
+                    clean_source_id,
+                    clean_target_id,
+                    clean_source_id,
+                    clean_target_id,
+                    clean_source_id,
+                    clean_source_id,
+                ),
+            )
+            _redirect_edges_for_node_merge(
+                connection,
+                source_node_id=clean_source_id,
+                target_node_id=clean_target_id,
+                now=now,
+            )
+            _rebind_identity_bindings(connection, clean_source_id, clean_target_id, now)
+            connection.execute(
+                """
+                UPDATE memory_nodes
+                SET summary = ?,
+                    confidence = ?,
+                    mention_count = mention_count + ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    _append_summary(target["summary"], source["summary"]),
+                    max(_confidence(target["confidence"]), _confidence(source["confidence"])),
+                    int(source["mention_count"]),
+                    now,
+                    clean_target_id,
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE memory_nodes
+                SET status = 'deleted',
+                    merged_into_node_id = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (clean_target_id, now, clean_source_id),
+            )
+        return True
+
+    def merge_edges(self, source_edge_id: str, target_edge_id: str) -> bool:
+        clean_source_id = _clean_text(source_edge_id)
+        clean_target_id = _clean_text(target_edge_id)
+        if not clean_source_id or not clean_target_id:
+            return False
+        if clean_source_id == clean_target_id:
+            raise ValueError("Cannot merge an edge into itself.")
+
+        now = _now()
+        with self._connect() as connection:
+            ensure_memory_graph_schema(connection)
+            source = _active_row_by_id(connection, "memory_edges", clean_source_id)
+            target = _active_row_by_id(connection, "memory_edges", clean_target_id)
+            if source is None or target is None:
+                return False
+            _merge_edge_rows(
+                connection,
+                source_edge=source,
+                target_edge=target,
+                now=now,
+            )
         return True
 
     def _record_failed_run(
@@ -828,16 +1124,21 @@ class MemoryGraphStore:
         kind: str,
         now: str,
     ) -> tuple[str, str]:
-        normalized_name = _normalize(name)
-        row = connection.execute(
-            """
-            SELECT id, status
-            FROM memory_tags
-            WHERE normalized_name = ?
-            """,
-            (normalized_name,),
-        ).fetchone()
+        normalized_name = _tag_identity(name)
+        row, redirected = _find_tag_by_identity(connection, normalized_name)
         if row:
+            if redirected:
+                connection.execute(
+                    """
+                    UPDATE memory_tags
+                    SET status = 'active',
+                        mention_count = mention_count + 1,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (now, row["id"]),
+                )
+                return row["id"], "matched_existing"
             connection.execute(
                 """
                 UPDATE memory_tags
@@ -845,6 +1146,7 @@ class MemoryGraphStore:
                     kind = ?,
                     status = 'active',
                     mention_count = mention_count + 1,
+                    merged_into_tag_id = NULL,
                     updated_at = ?
                 WHERE id = ?
                 """,
@@ -882,17 +1184,29 @@ class MemoryGraphStore:
         confidence: float,
         now: str,
     ) -> tuple[str, str]:
-        row = connection.execute(
-            """
-            SELECT id, confidence, summary, status
-            FROM memory_nodes
-            WHERE type = ? AND normalized_title = ?
-            """,
-            (node_type, normalized_title),
-        ).fetchone()
+        row, redirected = _find_node_by_identity(connection, node_type, normalized_title)
         if row:
             existing_confidence = _confidence(row["confidence"])
-            next_summary = summary if summary and confidence >= existing_confidence else row["summary"]
+            next_summary = _append_summary(row["summary"], summary)
+            if redirected:
+                connection.execute(
+                    """
+                    UPDATE memory_nodes
+                    SET summary = ?,
+                        confidence = ?,
+                        status = 'active',
+                        mention_count = mention_count + 1,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        next_summary,
+                        max(existing_confidence, confidence),
+                        now,
+                        row["id"],
+                    ),
+                )
+                return row["id"], "matched_existing"
             connection.execute(
                 """
                 UPDATE memory_nodes
@@ -901,6 +1215,7 @@ class MemoryGraphStore:
                     confidence = ?,
                     status = 'active',
                     mention_count = mention_count + 1,
+                    merged_into_node_id = NULL,
                     updated_at = ?
                 WHERE id = ?
                 """,
@@ -957,29 +1272,28 @@ class MemoryGraphStore:
         confidence: float,
         now: str,
     ) -> tuple[str, str]:
-        row = connection.execute(
-            """
-            SELECT id, confidence, summary, status
-            FROM memory_edges
-            WHERE source_node_id = ? AND target_node_id = ? AND relation_type = ?
-            """,
-            (source_node_id, target_node_id, relation_type),
-        ).fetchone()
+        row, redirected = _find_edge_by_identity(
+            connection,
+            source_node_id,
+            target_node_id,
+            relation_type,
+        )
         if row:
-            existing_confidence = _confidence(row["confidence"])
-            next_summary = summary if summary and confidence >= existing_confidence else row["summary"]
-            connection.execute(
-                """
-                UPDATE memory_edges
-                SET summary = ?,
-                    confidence = ?,
-                    status = 'active',
-                    mention_count = mention_count + 1,
-                    updated_at = ?
-                WHERE id = ?
-                """,
-                (next_summary, max(existing_confidence, confidence), now, row["id"]),
-            )
+            if row["status"] != "active" and not redirected:
+                existing_confidence = _confidence(row["confidence"])
+                connection.execute(
+                    """
+                    UPDATE memory_edges
+                    SET summary = ?,
+                        confidence = ?,
+                        status = 'active',
+                        mention_count = mention_count + 1,
+                        merged_into_edge_id = NULL,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (summary, max(existing_confidence, confidence), now, row["id"]),
+                )
             return row["id"], "matched_existing"
 
         edge_id = _new_id("mem_edge")
@@ -1142,6 +1456,491 @@ def _group_source_trace_ids(rows: list[sqlite3.Row]) -> dict[str, list[str]]:
     return {owner_id: sorted(source_ids) for owner_id, source_ids in grouped.items()}
 
 
+def _tag_identity(name: str) -> str:
+    return _normalize(name)
+
+
+def _node_identity(node_type: str, normalized_title: str) -> tuple[str, str]:
+    return _clean_text(node_type), _normalize(normalized_title)
+
+
+def _edge_identity(
+    source_node_id: str,
+    target_node_id: str,
+    relation_type: str,
+) -> tuple[str, str, str]:
+    return _clean_text(source_node_id), _clean_text(target_node_id), _clean_text(relation_type)
+
+
+def _find_tag_by_identity(
+    connection: sqlite3.Connection,
+    tag_identity: str,
+) -> tuple[sqlite3.Row | None, bool]:
+    row = connection.execute(
+        """
+        SELECT id, name, normalized_name, kind, status, mention_count, merged_into_tag_id
+        FROM memory_tags
+        WHERE normalized_name = ?
+        """,
+        (tag_identity,),
+    ).fetchone()
+    return _resolve_merged_row(
+        connection,
+        row,
+        table_name="memory_tags",
+        merged_column="merged_into_tag_id",
+    )
+
+
+def _find_node_by_identity(
+    connection: sqlite3.Connection,
+    node_type: str,
+    normalized_title: str,
+) -> tuple[sqlite3.Row | None, bool]:
+    identity = _node_identity(node_type, normalized_title)
+    row = connection.execute(
+        """
+        SELECT
+            id,
+            type,
+            title,
+            normalized_title,
+            summary,
+            confidence,
+            status,
+            mention_count,
+            merged_into_node_id
+        FROM memory_nodes
+        WHERE type = ? AND normalized_title = ?
+        """,
+        identity,
+    ).fetchone()
+    return _resolve_merged_row(
+        connection,
+        row,
+        table_name="memory_nodes",
+        merged_column="merged_into_node_id",
+    )
+
+
+def _find_edge_by_identity(
+    connection: sqlite3.Connection,
+    source_node_id: str,
+    target_node_id: str,
+    relation_type: str,
+) -> tuple[sqlite3.Row | None, bool]:
+    identity = _edge_identity(source_node_id, target_node_id, relation_type)
+    row = connection.execute(
+        """
+        SELECT
+            id,
+            source_node_id,
+            target_node_id,
+            relation_type,
+            summary,
+            confidence,
+            status,
+            mention_count,
+            merged_into_edge_id
+        FROM memory_edges
+        WHERE source_node_id = ? AND target_node_id = ? AND relation_type = ?
+        """,
+        identity,
+    ).fetchone()
+    return _resolve_merged_row(
+        connection,
+        row,
+        table_name="memory_edges",
+        merged_column="merged_into_edge_id",
+    )
+
+
+def _resolve_merged_row(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row | None,
+    *,
+    table_name: str,
+    merged_column: str,
+) -> tuple[sqlite3.Row | None, bool]:
+    redirected = False
+    seen_ids: set[str] = set()
+    while row is not None and row[merged_column]:
+        next_id = _clean_text(row[merged_column])
+        if not next_id or next_id in seen_ids:
+            break
+        seen_ids.add(next_id)
+        next_row = connection.execute(
+            f"""
+            SELECT *
+            FROM {table_name}
+            WHERE id = ?
+            """,
+            (next_id,),
+        ).fetchone()
+        if next_row is None:
+            break
+        row = next_row
+        redirected = True
+    return row, redirected
+
+
+def _active_row_by_id(
+    connection: sqlite3.Connection,
+    table_name: str,
+    row_id: str,
+) -> sqlite3.Row | None:
+    return connection.execute(
+        f"""
+        SELECT *
+        FROM {table_name}
+        WHERE id = ? AND status = 'active'
+        """,
+        (_clean_text(row_id),),
+    ).fetchone()
+
+
+def _append_summary(existing_summary: Any, next_summary: Any) -> str:
+    existing = _clean_text(existing_summary)
+    incoming = _clean_text(next_summary)
+    if not existing:
+        return incoming
+    if not incoming:
+        return existing
+    return f"{existing}\n\n{incoming}"
+
+
+def _merge_reason(existing_reason: Any, next_reason: Any) -> str:
+    existing = _clean_text(existing_reason)
+    incoming = _clean_text(next_reason)
+    if not existing:
+        return incoming
+    if not incoming or incoming == existing:
+        return existing
+    return f"{existing}; {incoming}"
+
+
+def _merge_tag_links(
+    connection: sqlite3.Connection,
+    *,
+    table_name: str,
+    owner_column: str,
+    source_tag_id: str,
+    target_tag_id: str,
+    now: str,
+) -> None:
+    rows = connection.execute(
+        f"""
+        SELECT
+            {owner_column} AS owner_id,
+            confidence,
+            reason,
+            mention_count,
+            first_seen_at,
+            last_seen_at
+        FROM {table_name}
+        WHERE tag_id = ?
+        """,
+        (source_tag_id,),
+    ).fetchall()
+    for row in rows:
+        owner_id = row["owner_id"]
+        existing = connection.execute(
+            f"""
+            SELECT confidence, reason, mention_count, first_seen_at, last_seen_at
+            FROM {table_name}
+            WHERE {owner_column} = ? AND tag_id = ?
+            """,
+            (owner_id, target_tag_id),
+        ).fetchone()
+        if existing is not None:
+            connection.execute(
+                f"""
+                UPDATE {table_name}
+                SET confidence = ?,
+                    reason = ?,
+                    mention_count = ?,
+                    first_seen_at = ?,
+                    last_seen_at = ?
+                WHERE {owner_column} = ? AND tag_id = ?
+                """,
+                (
+                    max(_confidence(existing["confidence"]), _confidence(row["confidence"])),
+                    _merge_reason(existing["reason"], row["reason"]),
+                    int(existing["mention_count"]) + int(row["mention_count"]),
+                    min(existing["first_seen_at"], row["first_seen_at"]),
+                    max(existing["last_seen_at"], row["last_seen_at"], now),
+                    owner_id,
+                    target_tag_id,
+                ),
+            )
+            connection.execute(
+                f"""
+                DELETE FROM {table_name}
+                WHERE {owner_column} = ? AND tag_id = ?
+                """,
+                (owner_id, source_tag_id),
+            )
+            continue
+
+        connection.execute(
+            f"""
+            UPDATE {table_name}
+            SET tag_id = ?,
+                last_seen_at = ?
+            WHERE {owner_column} = ? AND tag_id = ?
+            """,
+            (target_tag_id, now, owner_id, source_tag_id),
+        )
+
+
+def _merge_node_tag_links(
+    connection: sqlite3.Connection,
+    *,
+    source_node_id: str,
+    target_node_id: str,
+    now: str,
+) -> None:
+    rows = connection.execute(
+        """
+        SELECT tag_id, confidence, reason, mention_count, first_seen_at, last_seen_at
+        FROM memory_node_tags
+        WHERE node_id = ?
+        """,
+        (source_node_id,),
+    ).fetchall()
+    for row in rows:
+        existing = connection.execute(
+            """
+            SELECT confidence, reason, mention_count, first_seen_at, last_seen_at
+            FROM memory_node_tags
+            WHERE node_id = ? AND tag_id = ?
+            """,
+            (target_node_id, row["tag_id"]),
+        ).fetchone()
+        if existing is not None:
+            connection.execute(
+                """
+                UPDATE memory_node_tags
+                SET confidence = ?,
+                    reason = ?,
+                    mention_count = ?,
+                    first_seen_at = ?,
+                    last_seen_at = ?
+                WHERE node_id = ? AND tag_id = ?
+                """,
+                (
+                    max(_confidence(existing["confidence"]), _confidence(row["confidence"])),
+                    _merge_reason(existing["reason"], row["reason"]),
+                    int(existing["mention_count"]) + int(row["mention_count"]),
+                    min(existing["first_seen_at"], row["first_seen_at"]),
+                    max(existing["last_seen_at"], row["last_seen_at"], now),
+                    target_node_id,
+                    row["tag_id"],
+                ),
+            )
+            connection.execute(
+                """
+                DELETE FROM memory_node_tags
+                WHERE node_id = ? AND tag_id = ?
+                """,
+                (source_node_id, row["tag_id"]),
+            )
+            continue
+
+        connection.execute(
+            """
+            UPDATE memory_node_tags
+            SET node_id = ?,
+                last_seen_at = ?
+            WHERE node_id = ? AND tag_id = ?
+            """,
+            (target_node_id, now, source_node_id, row["tag_id"]),
+        )
+
+
+def _merge_edge_tag_links(
+    connection: sqlite3.Connection,
+    *,
+    source_edge_id: str,
+    target_edge_id: str,
+    now: str,
+) -> None:
+    rows = connection.execute(
+        """
+        SELECT tag_id, confidence, reason, mention_count, first_seen_at, last_seen_at
+        FROM memory_edge_tags
+        WHERE edge_id = ?
+        """,
+        (source_edge_id,),
+    ).fetchall()
+    for row in rows:
+        existing = connection.execute(
+            """
+            SELECT confidence, reason, mention_count, first_seen_at, last_seen_at
+            FROM memory_edge_tags
+            WHERE edge_id = ? AND tag_id = ?
+            """,
+            (target_edge_id, row["tag_id"]),
+        ).fetchone()
+        if existing is not None:
+            connection.execute(
+                """
+                UPDATE memory_edge_tags
+                SET confidence = ?,
+                    reason = ?,
+                    mention_count = ?,
+                    first_seen_at = ?,
+                    last_seen_at = ?
+                WHERE edge_id = ? AND tag_id = ?
+                """,
+                (
+                    max(_confidence(existing["confidence"]), _confidence(row["confidence"])),
+                    _merge_reason(existing["reason"], row["reason"]),
+                    int(existing["mention_count"]) + int(row["mention_count"]),
+                    min(existing["first_seen_at"], row["first_seen_at"]),
+                    max(existing["last_seen_at"], row["last_seen_at"], now),
+                    target_edge_id,
+                    row["tag_id"],
+                ),
+            )
+            connection.execute(
+                """
+                DELETE FROM memory_edge_tags
+                WHERE edge_id = ? AND tag_id = ?
+                """,
+                (source_edge_id, row["tag_id"]),
+            )
+            continue
+
+        connection.execute(
+            """
+            UPDATE memory_edge_tags
+            SET edge_id = ?,
+                last_seen_at = ?
+            WHERE edge_id = ? AND tag_id = ?
+            """,
+            (target_edge_id, now, source_edge_id, row["tag_id"]),
+        )
+
+
+def _merge_edge_rows(
+    connection: sqlite3.Connection,
+    *,
+    source_edge: sqlite3.Row,
+    target_edge: sqlite3.Row,
+    now: str,
+) -> None:
+    source_edge_id = source_edge["id"]
+    target_edge_id = target_edge["id"]
+    _merge_edge_tag_links(
+        connection,
+        source_edge_id=source_edge_id,
+        target_edge_id=target_edge_id,
+        now=now,
+    )
+    connection.execute(
+        """
+        UPDATE memory_edge_observations
+        SET resolved_edge_id = ?
+        WHERE resolved_edge_id = ?
+        """,
+        (target_edge_id, source_edge_id),
+    )
+    connection.execute(
+        """
+        UPDATE memory_edges
+        SET summary = ?,
+            confidence = ?,
+            status = 'active',
+            mention_count = mention_count + ?,
+            merged_into_edge_id = NULL,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            _append_summary(target_edge["summary"], source_edge["summary"]),
+            max(_confidence(target_edge["confidence"]), _confidence(source_edge["confidence"])),
+            int(source_edge["mention_count"]),
+            now,
+            target_edge_id,
+        ),
+    )
+    connection.execute(
+        """
+        UPDATE memory_edges
+        SET status = 'deleted',
+            merged_into_edge_id = ?,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (target_edge_id, now, source_edge_id),
+    )
+
+
+def _redirect_edges_for_node_merge(
+    connection: sqlite3.Connection,
+    *,
+    source_node_id: str,
+    target_node_id: str,
+    now: str,
+) -> None:
+    affected_tag_ids: set[str] = set()
+    edges = connection.execute(
+        """
+        SELECT *
+        FROM memory_edges
+        WHERE status = 'active'
+            AND (source_node_id = ? OR target_node_id = ?)
+        ORDER BY created_at ASC
+        """,
+        (source_node_id, source_node_id),
+    ).fetchall()
+    for edge in edges:
+        next_source_id = target_node_id if edge["source_node_id"] == source_node_id else edge["source_node_id"]
+        next_target_id = target_node_id if edge["target_node_id"] == source_node_id else edge["target_node_id"]
+        if next_source_id == next_target_id:
+            affected_tag_ids.update(_tag_ids_for_edges(connection, [edge["id"]]))
+            connection.execute(
+                """
+                UPDATE memory_edges
+                SET status = 'deleted',
+                    merged_into_edge_id = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (now, edge["id"]),
+            )
+            connection.execute("DELETE FROM memory_edge_tags WHERE edge_id = ?", (edge["id"],))
+            continue
+
+        matching_edge, _ = _find_edge_by_identity(
+            connection,
+            next_source_id,
+            next_target_id,
+            edge["relation_type"],
+        )
+        if matching_edge is not None and matching_edge["id"] != edge["id"]:
+            _merge_edge_rows(
+                connection,
+                source_edge=edge,
+                target_edge=matching_edge,
+                now=now,
+            )
+            continue
+
+        connection.execute(
+            """
+            UPDATE memory_edges
+            SET source_node_id = ?,
+                target_node_id = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (next_source_id, next_target_id, now, edge["id"]),
+        )
+    _delete_orphan_tags(connection, affected_tag_ids, now)
+
+
 def _tag_ids_for_nodes(connection: sqlite3.Connection, node_ids: list[str]) -> list[str]:
     clean_ids = _unique_texts(node_ids)
     if not clean_ids:
@@ -1216,6 +2015,23 @@ def _clear_identity_bindings(
         WHERE memory_node_id IN ({_placeholders_from_ids(clean_ids)})
         """,
         [now, *clean_ids],
+    )
+
+
+def _rebind_identity_bindings(
+    connection: sqlite3.Connection,
+    source_node_id: str,
+    target_node_id: str,
+    now: str,
+) -> None:
+    connection.execute(
+        """
+        UPDATE conversation_context_identities
+        SET memory_node_id = ?,
+            updated_at = ?
+        WHERE memory_node_id = ?
+        """,
+        (target_node_id, now, source_node_id),
     )
 
 

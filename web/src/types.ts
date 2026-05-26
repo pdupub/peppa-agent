@@ -68,6 +68,16 @@ export type MemoryGraphTag = {
   mention_count: number;
 };
 
+export type MemoryGraphStoredTag = {
+  id: string;
+  name: string;
+  normalized_name: string;
+  kind: string;
+  mention_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
 export type MemoryGraphNode = {
   id: string;
   type: string;
@@ -102,6 +112,7 @@ export type MemoryGraphEdge = {
 export type MemoryGraphResponse = {
   nodes: MemoryGraphNode[];
   edges: MemoryGraphEdge[];
+  tags: MemoryGraphStoredTag[];
   stats: {
     nodes: number;
     edges: number;

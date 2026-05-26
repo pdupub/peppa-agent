@@ -782,6 +782,74 @@ pre {
   font-size: 11px;
 }
 
+.memory-maintenance-form {
+  display: grid;
+  gap: 8px;
+}
+
+.memory-maintenance-form label {
+  display: grid;
+  gap: 5px;
+  color: #8c95a5;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.memory-maintenance-form input,
+.memory-maintenance-form select,
+.memory-maintenance-form textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #2f3a49;
+  border-radius: 8px;
+  color: #e7eaf0;
+  background: #151922;
+  font: inherit;
+  font-size: 12px;
+  text-transform: none;
+}
+
+.memory-maintenance-form input,
+.memory-maintenance-form select {
+  min-height: 34px;
+  padding: 0 9px;
+}
+
+.memory-maintenance-form textarea {
+  min-height: 112px;
+  padding: 9px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.memory-action-button {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 32px;
+  padding: 7px 10px;
+  border: 1px solid #335462;
+  border-radius: 8px;
+  color: #cfeff5;
+  background: #102027;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.memory-action-button:hover:not(:disabled) {
+  border-color: #4a7e91;
+  background: #132b35;
+}
+
+.memory-action-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
 .memory-delete-button {
   display: inline-flex;
   width: fit-content;

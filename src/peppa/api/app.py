@@ -82,6 +82,19 @@ class MemoryExtractionResponse(BaseModel):
     trace: dict[str, Any]
 
 
+class MemorySummaryUpdateRequest(BaseModel):
+    summary: str = ""
+
+
+class MemoryTagUpdateRequest(BaseModel):
+    name: str | None = None
+    kind: str | None = None
+
+
+class MemoryMergeRequest(BaseModel):
+    target_id: str = Field(min_length=1)
+
+
 class IdentityExtractionRequest(BaseModel):
     trace_ids: list[str] = Field(min_length=1, max_length=20)
     model: str | None = None
@@ -239,10 +252,72 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Memory node not found.")
         return memory_graph_store.get_memory_graph()
 
+    @app.patch("/api/memory/graph/nodes/{node_id}/summary")
+    async def update_memory_node_summary(
+        node_id: str,
+        request: MemorySummaryUpdateRequest,
+    ) -> dict[str, Any]:
+        if not memory_graph_store.update_node_summary(node_id, request.summary):
+            raise HTTPException(status_code=404, detail="Memory node not found.")
+        return memory_graph_store.get_memory_graph()
+
+    @app.post("/api/memory/graph/nodes/{node_id}/merge")
+    async def merge_memory_node(node_id: str, request: MemoryMergeRequest) -> dict[str, Any]:
+        try:
+            merged = memory_graph_store.merge_nodes(node_id, request.target_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not merged:
+            raise HTTPException(status_code=404, detail="Memory node not found.")
+        return memory_graph_store.get_memory_graph()
+
     @app.delete("/api/memory/graph/edges/{edge_id}")
     async def delete_memory_edge(edge_id: str) -> dict[str, Any]:
         if not memory_graph_store.delete_edge(edge_id):
             raise HTTPException(status_code=404, detail="Memory edge not found.")
+        return memory_graph_store.get_memory_graph()
+
+    @app.patch("/api/memory/graph/edges/{edge_id}/summary")
+    async def update_memory_edge_summary(
+        edge_id: str,
+        request: MemorySummaryUpdateRequest,
+    ) -> dict[str, Any]:
+        if not memory_graph_store.update_edge_summary(edge_id, request.summary):
+            raise HTTPException(status_code=404, detail="Memory edge not found.")
+        return memory_graph_store.get_memory_graph()
+
+    @app.post("/api/memory/graph/edges/{edge_id}/merge")
+    async def merge_memory_edge(edge_id: str, request: MemoryMergeRequest) -> dict[str, Any]:
+        try:
+            merged = memory_graph_store.merge_edges(edge_id, request.target_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not merged:
+            raise HTTPException(status_code=404, detail="Memory edge not found.")
+        return memory_graph_store.get_memory_graph()
+
+    @app.patch("/api/memory/graph/tags/{tag_id}")
+    async def update_memory_tag(tag_id: str, request: MemoryTagUpdateRequest) -> dict[str, Any]:
+        try:
+            updated = memory_graph_store.update_tag(
+                tag_id,
+                name=request.name,
+                kind=request.kind,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not updated:
+            raise HTTPException(status_code=404, detail="Memory tag not found.")
+        return memory_graph_store.get_memory_graph()
+
+    @app.post("/api/memory/graph/tags/{tag_id}/merge")
+    async def merge_memory_tag(tag_id: str, request: MemoryMergeRequest) -> dict[str, Any]:
+        try:
+            merged = memory_graph_store.merge_tags(tag_id, request.target_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not merged:
+            raise HTTPException(status_code=404, detail="Memory tag not found.")
         return memory_graph_store.get_memory_graph()
 
     @app.get("/api/identity/context")

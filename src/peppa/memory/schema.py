@@ -15,9 +15,11 @@ def ensure_memory_graph_schema(connection: sqlite3.Connection) -> None:
             confidence REAL NOT NULL,
             status TEXT NOT NULL,
             mention_count INTEGER NOT NULL,
+            merged_into_node_id TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            UNIQUE(type, normalized_title)
+            UNIQUE(type, normalized_title),
+            FOREIGN KEY (merged_into_node_id) REFERENCES memory_nodes(id)
         );
 
         CREATE TABLE IF NOT EXISTS memory_edges (
@@ -29,11 +31,13 @@ def ensure_memory_graph_schema(connection: sqlite3.Connection) -> None:
             confidence REAL NOT NULL,
             status TEXT NOT NULL,
             mention_count INTEGER NOT NULL,
+            merged_into_edge_id TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             UNIQUE(source_node_id, target_node_id, relation_type),
             FOREIGN KEY (source_node_id) REFERENCES memory_nodes(id),
-            FOREIGN KEY (target_node_id) REFERENCES memory_nodes(id)
+            FOREIGN KEY (target_node_id) REFERENCES memory_nodes(id),
+            FOREIGN KEY (merged_into_edge_id) REFERENCES memory_edges(id)
         );
 
         CREATE TABLE IF NOT EXISTS memory_tags (
@@ -43,8 +47,10 @@ def ensure_memory_graph_schema(connection: sqlite3.Connection) -> None:
             kind TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'active',
             mention_count INTEGER NOT NULL,
+            merged_into_tag_id TEXT,
             created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (merged_into_tag_id) REFERENCES memory_tags(id)
         );
 
         CREATE TABLE IF NOT EXISTS memory_node_tags (
@@ -207,6 +213,24 @@ def ensure_memory_graph_schema(connection: sqlite3.Connection) -> None:
         table_name="memory_tags",
         column_name="status",
         column_definition="TEXT NOT NULL DEFAULT 'active'",
+    )
+    _ensure_column(
+        connection,
+        table_name="memory_nodes",
+        column_name="merged_into_node_id",
+        column_definition="TEXT",
+    )
+    _ensure_column(
+        connection,
+        table_name="memory_edges",
+        column_name="merged_into_edge_id",
+        column_definition="TEXT",
+    )
+    _ensure_column(
+        connection,
+        table_name="memory_tags",
+        column_name="merged_into_tag_id",
+        column_definition="TEXT",
     )
 
 

@@ -1,10 +1,21 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ArrowLeft, Database, GitBranch, RefreshCw, Tag, Trash2 } from 'lucide-react';
-import { deleteMemoryGraphEdge, deleteMemoryGraphNode, fetchMemoryGraph } from './api';
+import { ArrowLeft, Database, GitBranch, GitMerge, RefreshCw, Save, Tag, Trash2 } from 'lucide-react';
+import {
+  deleteMemoryGraphEdge,
+  deleteMemoryGraphNode,
+  fetchMemoryGraph,
+  mergeMemoryGraphEdge,
+  mergeMemoryGraphNode,
+  mergeMemoryGraphTag,
+  updateMemoryGraphEdgeSummary,
+  updateMemoryGraphNodeSummary,
+  updateMemoryGraphTag
+} from './api';
 import type {
   MemoryGraphEdge,
   MemoryGraphNode,
   MemoryGraphResponse,
+  MemoryGraphStoredTag,
   MemoryGraphTag
 } from './types';
 import type { ElementDatum, Graph as G6Graph, GraphData, IElementEvent } from '@antv/g6';
@@ -30,12 +41,19 @@ const MIN_NODE_VISUAL_SIZE = 30;
 const LAYOUT_NODE_SIZE = 92;
 const LAYOUT_NODE_SPACING = 34;
 const LAYOUT_PADDING = 64;
+const TAG_KINDS = ['explicit', 'inferred', 'topic', 'preference', 'identity'];
 
 export function MemoryGraphPage({ onBack }: { onBack: () => void }) {
   const [memoryGraph, setMemoryGraph] = useState<MemoryGraphResponse | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [maintenanceAction, setMaintenanceAction] = useState<string | null>(null);
+  const [summaryDraft, setSummaryDraft] = useState('');
+  const [mergeTargetId, setMergeTargetId] = useState('');
+  const [selectedTagId, setSelectedTagId] = useState('');
+  const [tagNameDraft, setTagNameDraft] = useState('');
+  const [tagKindDraft, setTagKindDraft] = useState('topic');
   const [error, setError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const graphRef = useRef<G6Graph | null>(null);
@@ -68,6 +86,39 @@ export function MemoryGraphPage({ onBack }: { onBack: () => void }) {
     }
     setSelection(memoryGraph.nodes[0] ? { kind: 'node', value: memoryGraph.nodes[0] } : null);
   }, [memoryGraph, selection]);
+
+  useEffect(() => {
+    setSummaryDraft(selection?.value.summary ?? '');
+    setMergeTargetId('');
+  }, [selection?.kind, selection?.value.id, selection?.value.summary]);
+
+  useEffect(() => {
+    if (!memoryGraph) {
+      return;
+    }
+    if (!selectedTagId && memoryGraph.tags[0]) {
+      setSelectedTagId(memoryGraph.tags[0].id);
+      return;
+    }
+    if (selectedTagId && !memoryGraph.tags.some((tag) => tag.id === selectedTagId)) {
+      setSelectedTagId(memoryGraph.tags[0]?.id ?? '');
+    }
+  }, [memoryGraph, selectedTagId]);
+
+  const selectedTag = useMemo(
+    () => memoryGraph?.tags.find((tag) => tag.id === selectedTagId) ?? null,
+    [memoryGraph, selectedTagId]
+  );
+
+  useEffect(() => {
+    if (!selectedTag) {
+      setTagNameDraft('');
+      setTagKindDraft('topic');
+      return;
+    }
+    setTagNameDraft(selectedTag.name);
+    setTagKindDraft(selectedTag.kind);
+  }, [selectedTag]);
 
   const graphData = useMemo(() => {
     if (!memoryGraph) {
@@ -212,6 +263,90 @@ export function MemoryGraphPage({ onBack }: { onBack: () => void }) {
     }
   }
 
+  async function saveSelectionSummary() {
+    if (!selection || maintenanceAction) {
+      return;
+    }
+    setMaintenanceAction('summary');
+    setError(null);
+    try {
+      const nextGraph =
+        selection.kind === 'node'
+          ? await updateMemoryGraphNodeSummary(selection.value.id, summaryDraft)
+          : await updateMemoryGraphEdgeSummary(selection.value.id, summaryDraft);
+      setMemoryGraph(nextGraph);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Failed to save summary.');
+    } finally {
+      setMaintenanceAction(null);
+    }
+  }
+
+  async function mergeSelection() {
+    if (!selection || !mergeTargetId || maintenanceAction) {
+      return;
+    }
+    const label =
+      selection.kind === 'node'
+        ? `Merge node "${selection.value.title}" into the selected target?`
+        : `Merge edge "${selection.value.source_title} -> ${selection.value.target_title}" into the selected target?`;
+    if (!window.confirm(label)) {
+      return;
+    }
+
+    setMaintenanceAction('merge');
+    setError(null);
+    try {
+      const nextGraph =
+        selection.kind === 'node'
+          ? await mergeMemoryGraphNode(selection.value.id, mergeTargetId)
+          : await mergeMemoryGraphEdge(selection.value.id, mergeTargetId);
+      setMemoryGraph(nextGraph);
+    } catch (mergeError) {
+      setError(mergeError instanceof Error ? mergeError.message : 'Failed to merge memory graph item.');
+    } finally {
+      setMaintenanceAction(null);
+    }
+  }
+
+  async function saveSelectedTag() {
+    if (!selectedTag || maintenanceAction) {
+      return;
+    }
+    setMaintenanceAction('tag-save');
+    setError(null);
+    try {
+      const nextGraph = await updateMemoryGraphTag(selectedTag.id, {
+        name: tagNameDraft,
+        kind: tagKindDraft
+      });
+      setMemoryGraph(nextGraph);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Failed to save tag.');
+    } finally {
+      setMaintenanceAction(null);
+    }
+  }
+
+  async function mergeSelectedTag(targetTagId: string) {
+    if (!selectedTag || !targetTagId || maintenanceAction) {
+      return;
+    }
+    if (!window.confirm(`Merge tag "${selectedTag.name}" into the selected target?`)) {
+      return;
+    }
+    setMaintenanceAction('tag-merge');
+    setError(null);
+    try {
+      const nextGraph = await mergeMemoryGraphTag(selectedTag.id, targetTagId);
+      setMemoryGraph(nextGraph);
+    } catch (mergeError) {
+      setError(mergeError instanceof Error ? mergeError.message : 'Failed to merge tag.');
+    } finally {
+      setMaintenanceAction(null);
+    }
+  }
+
   const nodeTypeCounts = useMemo(() => countNodeTypes(memoryGraph?.nodes ?? []), [memoryGraph]);
   const topTags = useMemo(() => collectTopTags(memoryGraph), [memoryGraph]);
 
@@ -290,11 +425,36 @@ export function MemoryGraphPage({ onBack }: { onBack: () => void }) {
           </section>
 
           <section>
+            <h3>Tags</h3>
+            <TagMaintenance
+              tags={memoryGraph?.tags ?? []}
+              selectedTag={selectedTag}
+              selectedTagId={selectedTagId}
+              tagNameDraft={tagNameDraft}
+              tagKindDraft={tagKindDraft}
+              isBusy={maintenanceAction === 'tag-save' || maintenanceAction === 'tag-merge'}
+              onSelectTag={setSelectedTagId}
+              onTagNameChange={setTagNameDraft}
+              onTagKindChange={setTagKindDraft}
+              onSave={() => void saveSelectedTag()}
+              onMerge={(targetTagId) => void mergeSelectedTag(targetTagId)}
+            />
+          </section>
+
+          <section>
             <h3>Selection</h3>
             {selection ? (
               <MemorySelection
                 selection={selection}
+                memoryGraph={memoryGraph}
                 isDeleting={isDeleting}
+                isBusy={Boolean(maintenanceAction)}
+                summaryDraft={summaryDraft}
+                mergeTargetId={mergeTargetId}
+                onSummaryChange={setSummaryDraft}
+                onSaveSummary={() => void saveSelectionSummary()}
+                onMergeTargetChange={setMergeTargetId}
+                onMerge={() => void mergeSelection()}
                 onDelete={() => void deleteSelection()}
               />
             ) : (
@@ -319,13 +479,36 @@ function MemoryStat({ icon, label, value }: { icon: ReactNode; label: string; va
 
 function MemorySelection({
   selection,
+  memoryGraph,
   isDeleting,
+  isBusy,
+  summaryDraft,
+  mergeTargetId,
+  onSummaryChange,
+  onSaveSummary,
+  onMergeTargetChange,
+  onMerge,
   onDelete
 }: {
   selection: Selection;
+  memoryGraph: MemoryGraphResponse | null;
   isDeleting: boolean;
+  isBusy: boolean;
+  summaryDraft: string;
+  mergeTargetId: string;
+  onSummaryChange: (summary: string) => void;
+  onSaveSummary: () => void;
+  onMergeTargetChange: (targetId: string) => void;
+  onMerge: () => void;
   onDelete: () => void;
 }) {
+  const mergeTargets =
+    selection.kind === 'node'
+      ? memoryGraph?.nodes.filter((node) => node.id !== selection.value.id) ?? []
+      : memoryGraph?.edges.filter((edge) => edge.id !== selection.value.id) ?? [];
+  const canSaveSummary = summaryDraft !== selection.value.summary && !isBusy;
+  const canMerge = Boolean(mergeTargetId) && !isBusy;
+
   if (selection.kind === 'edge') {
     const edge = selection.value;
     return (
@@ -337,10 +520,25 @@ function MemorySelection({
         <p>{edge.summary || 'No summary.'}</p>
         <TagCloud tags={edge.tags} />
         <small>{edge.source_trace_ids.length} source trace(s)</small>
+        <SummaryEditor
+          value={summaryDraft}
+          canSave={canSaveSummary}
+          isBusy={isBusy}
+          onChange={onSummaryChange}
+          onSave={onSaveSummary}
+        />
+        <MergeControl
+          value={mergeTargetId}
+          targets={mergeTargets}
+          canMerge={canMerge}
+          isBusy={isBusy}
+          onChange={onMergeTargetChange}
+          onMerge={onMerge}
+        />
         <button
           className="memory-delete-button"
           type="button"
-          disabled={isDeleting}
+          disabled={isDeleting || isBusy}
           onClick={onDelete}
         >
           <Trash2 size={14} />
@@ -358,14 +556,191 @@ function MemorySelection({
       <p>{node.summary || 'No summary.'}</p>
       <TagCloud tags={node.tags} />
       <small>{node.source_trace_ids.length} source trace(s)</small>
+      <SummaryEditor
+        value={summaryDraft}
+        canSave={canSaveSummary}
+        isBusy={isBusy}
+        onChange={onSummaryChange}
+        onSave={onSaveSummary}
+      />
+      <MergeControl
+        value={mergeTargetId}
+        targets={mergeTargets}
+        canMerge={canMerge}
+        isBusy={isBusy}
+        onChange={onMergeTargetChange}
+        onMerge={onMerge}
+      />
       <button
         className="memory-delete-button"
         type="button"
-        disabled={isDeleting}
+        disabled={isDeleting || isBusy}
         onClick={onDelete}
       >
         <Trash2 size={14} />
         <span>{isDeleting ? 'Deleting...' : 'Delete'}</span>
+      </button>
+    </div>
+  );
+}
+
+function SummaryEditor({
+  value,
+  canSave,
+  isBusy,
+  onChange,
+  onSave
+}: {
+  value: string;
+  canSave: boolean;
+  isBusy: boolean;
+  onChange: (summary: string) => void;
+  onSave: () => void;
+}) {
+  return (
+    <div className="memory-maintenance-form">
+      <label>
+        <span>Summary</span>
+        <textarea value={value} onChange={(event) => onChange(event.target.value)} rows={5} />
+      </label>
+      <button className="memory-action-button" type="button" disabled={!canSave} onClick={onSave}>
+        <Save size={14} />
+        <span>{isBusy ? 'Saving...' : 'Save'}</span>
+      </button>
+    </div>
+  );
+}
+
+function MergeControl({
+  value,
+  targets,
+  canMerge,
+  isBusy,
+  onChange,
+  onMerge
+}: {
+  value: string;
+  targets: Array<MemoryGraphNode | MemoryGraphEdge>;
+  canMerge: boolean;
+  isBusy: boolean;
+  onChange: (targetId: string) => void;
+  onMerge: () => void;
+}) {
+  return (
+    <div className="memory-maintenance-form">
+      <label>
+        <span>Merge Into</span>
+        <select value={value} onChange={(event) => onChange(event.target.value)}>
+          <option value="">Select target</option>
+          {targets.map((target) => (
+            <option key={target.id} value={target.id}>
+              {isMemoryGraphNode(target)
+                ? `${target.title} / ${target.type}`
+                : `${target.source_title} -> ${target.target_title} / ${target.relation_type}`}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button className="memory-action-button" type="button" disabled={!canMerge} onClick={onMerge}>
+        <GitMerge size={14} />
+        <span>{isBusy ? 'Merging...' : 'Merge'}</span>
+      </button>
+    </div>
+  );
+}
+
+function TagMaintenance({
+  tags,
+  selectedTag,
+  selectedTagId,
+  tagNameDraft,
+  tagKindDraft,
+  isBusy,
+  onSelectTag,
+  onTagNameChange,
+  onTagKindChange,
+  onSave,
+  onMerge
+}: {
+  tags: MemoryGraphStoredTag[];
+  selectedTag: MemoryGraphStoredTag | null;
+  selectedTagId: string;
+  tagNameDraft: string;
+  tagKindDraft: string;
+  isBusy: boolean;
+  onSelectTag: (tagId: string) => void;
+  onTagNameChange: (name: string) => void;
+  onTagKindChange: (kind: string) => void;
+  onSave: () => void;
+  onMerge: (targetTagId: string) => void;
+}) {
+  const [targetTagId, setTargetTagId] = useState('');
+
+  useEffect(() => {
+    setTargetTagId('');
+  }, [selectedTagId]);
+
+  if (tags.length === 0) {
+    return <p className="memory-muted">No tags.</p>;
+  }
+
+  const canSave =
+    selectedTag !== null &&
+    (tagNameDraft !== selectedTag.name || tagKindDraft !== selectedTag.kind) &&
+    !isBusy;
+  const canMerge = selectedTag !== null && Boolean(targetTagId) && !isBusy;
+
+  return (
+    <div className="memory-maintenance-form">
+      <label>
+        <span>Tag</span>
+        <select value={selectedTagId} onChange={(event) => onSelectTag(event.target.value)}>
+          {tags.map((tag) => (
+            <option key={tag.id} value={tag.id}>
+              {tag.name} / {tag.kind}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <span>Name</span>
+        <input value={tagNameDraft} onChange={(event) => onTagNameChange(event.target.value)} />
+      </label>
+      <label>
+        <span>Kind</span>
+        <select value={tagKindDraft} onChange={(event) => onTagKindChange(event.target.value)}>
+          {TAG_KINDS.map((kind) => (
+            <option key={kind} value={kind}>
+              {kind}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button className="memory-action-button" type="button" disabled={!canSave} onClick={onSave}>
+        <Save size={14} />
+        <span>{isBusy ? 'Saving...' : 'Save'}</span>
+      </button>
+      <label>
+        <span>Merge Into</span>
+        <select value={targetTagId} onChange={(event) => setTargetTagId(event.target.value)}>
+          <option value="">Select target</option>
+          {tags
+            .filter((tag) => tag.id !== selectedTagId)
+            .map((tag) => (
+              <option key={tag.id} value={tag.id}>
+                {tag.name} / {tag.kind}
+              </option>
+            ))}
+        </select>
+      </label>
+      <button
+        className="memory-action-button"
+        type="button"
+        disabled={!canMerge}
+        onClick={() => onMerge(targetTagId)}
+      >
+        <GitMerge size={14} />
+        <span>{isBusy ? 'Merging...' : 'Merge'}</span>
       </button>
     </div>
   );

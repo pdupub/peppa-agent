@@ -42,9 +42,72 @@ export function deleteMemoryGraphNode(nodeId: string): Promise<MemoryGraphRespon
   });
 }
 
+export function updateMemoryGraphNodeSummary(
+  nodeId: string,
+  summary: string
+): Promise<MemoryGraphResponse> {
+  return requestJson<MemoryGraphResponse>(
+    `/api/memory/graph/nodes/${encodeURIComponent(nodeId)}/summary`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ summary })
+    }
+  );
+}
+
+export function mergeMemoryGraphNode(
+  nodeId: string,
+  targetId: string
+): Promise<MemoryGraphResponse> {
+  return requestJson<MemoryGraphResponse>(`/api/memory/graph/nodes/${encodeURIComponent(nodeId)}/merge`, {
+    method: 'POST',
+    body: JSON.stringify({ target_id: targetId })
+  });
+}
+
 export function deleteMemoryGraphEdge(edgeId: string): Promise<MemoryGraphResponse> {
   return requestJson<MemoryGraphResponse>(`/api/memory/graph/edges/${encodeURIComponent(edgeId)}`, {
     method: 'DELETE'
+  });
+}
+
+export function updateMemoryGraphEdgeSummary(
+  edgeId: string,
+  summary: string
+): Promise<MemoryGraphResponse> {
+  return requestJson<MemoryGraphResponse>(
+    `/api/memory/graph/edges/${encodeURIComponent(edgeId)}/summary`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ summary })
+    }
+  );
+}
+
+export function mergeMemoryGraphEdge(
+  edgeId: string,
+  targetId: string
+): Promise<MemoryGraphResponse> {
+  return requestJson<MemoryGraphResponse>(`/api/memory/graph/edges/${encodeURIComponent(edgeId)}/merge`, {
+    method: 'POST',
+    body: JSON.stringify({ target_id: targetId })
+  });
+}
+
+export function updateMemoryGraphTag(
+  tagId: string,
+  payload: { name?: string; kind?: string }
+): Promise<MemoryGraphResponse> {
+  return requestJson<MemoryGraphResponse>(`/api/memory/graph/tags/${encodeURIComponent(tagId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload)
+  });
+}
+
+export function mergeMemoryGraphTag(tagId: string, targetId: string): Promise<MemoryGraphResponse> {
+  return requestJson<MemoryGraphResponse>(`/api/memory/graph/tags/${encodeURIComponent(tagId)}/merge`, {
+    method: 'POST',
+    body: JSON.stringify({ target_id: targetId })
   });
 }
 
