@@ -615,7 +615,17 @@ function App() {
                         type="button"
                         onClick={() => setActiveTrace(trace)}
                       >
-                        <span className="trace-model">{trace.model}</span>
+                        <span className="trace-meta">
+                          <span className="trace-model">{trace.model}</span>
+                          {trace.starts_new_topic && (
+                            <span
+                              className="trace-topic-badge"
+                              title={trace.topic_boundary?.topic_title ?? 'New topic'}
+                            >
+                              New topic
+                            </span>
+                          )}
+                        </span>
                         <span className="trace-message">{trace.user_message}</span>
                         <span className={trace.error ? 'trace-state error' : 'trace-state'}>
                           {trace.error ? 'error' : `${trace.duration_ms ?? 0} ms`}

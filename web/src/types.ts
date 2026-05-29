@@ -23,6 +23,20 @@ export type TraceRecord = {
   error: string | null;
   created_at: string;
   auto_memory_extracted?: boolean;
+  starts_new_topic?: boolean;
+  topic_boundary?: {
+    id: string;
+    start_trace_id: string;
+    conversation_id: string;
+    run_id: string | null;
+    topic_title: string;
+    reason: string;
+    confidence: number;
+    tags: string[];
+    status: string;
+    error: string | null;
+    created_at: string;
+  };
 };
 
 export type ChatResponse = {

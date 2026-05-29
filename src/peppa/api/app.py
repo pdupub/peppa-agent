@@ -41,6 +41,7 @@ from peppa.topics import (
     MAX_TOPIC_BOUNDARY_DETECTION_TRACES,
     TOPIC_BOUNDARY_DETECTION_TURN_THRESHOLD,
     TOPIC_BOUNDARY_TOOL_NAME,
+    TopicBoundaryRecord,
     TopicBoundaryRunRecord,
     TopicBoundaryStore,
     topic_boundary_tool_choice,
@@ -226,7 +227,7 @@ def create_app() -> FastAPI:
         state = memory_auto_extraction_store.get_state()
         return ChatResponse(
             conversation_id=result.conversation_id,
-            trace=_trace_payload_with_auto_memory_marker(result.trace, state),
+            trace=_trace_payload_with_markers(result.trace, state),
         )
 
     @app.post("/api/chat/stream", response_model=None)
@@ -286,7 +287,7 @@ def create_app() -> FastAPI:
                             "done",
                             {
                                 "conversation_id": result.conversation_id,
-                                "trace": _trace_payload_with_auto_memory_marker(
+                                "trace": _trace_payload_with_markers(
                                     result.trace,
                                     state,
                                 ),
@@ -330,10 +331,18 @@ def create_app() -> FastAPI:
     @app.get("/api/traces")
     async def traces(limit: int = 25) -> dict[str, Any]:
         state = memory_auto_extraction_store.get_state()
+        records = storage.list_traces(limit=limit)
+        topic_boundaries = topic_boundary_store.get_valid_boundaries_by_trace_ids(
+            [trace.id for trace in records]
+        )
         return {
             "traces": [
-                _trace_payload_with_auto_memory_marker(trace, state)
-                for trace in storage.list_traces(limit=limit)
+                _trace_payload_with_markers(
+                    trace,
+                    state,
+                    topic_boundaries.get(trace.id),
+                )
+                for trace in records
             ],
         }
 
@@ -342,9 +351,13 @@ def create_app() -> FastAPI:
         record = storage.get_trace(trace_id)
         if record is None:
             raise HTTPException(status_code=404, detail="Trace not found.")
-        return _trace_payload_with_auto_memory_marker(
+        topic_boundary = topic_boundary_store.get_valid_boundaries_by_trace_ids([record.id]).get(
+            record.id
+        )
+        return _trace_payload_with_markers(
             record,
             memory_auto_extraction_store.get_state(),
+            topic_boundary,
         )
 
     @app.get("/api/memory/graph")
@@ -945,15 +958,19 @@ def _auto_memory_extraction_trigger(
     return None
 
 
-def _trace_payload_with_auto_memory_marker(
+def _trace_payload_with_markers(
     trace: TraceRecord,
     state: MemoryAutoExtractionState | None,
+    topic_boundary: TopicBoundaryRecord | None = None,
 ) -> dict[str, Any]:
     payload = trace.public_dict()
     cutoff = state.last_source_trace_created_at if state else None
     payload["auto_memory_extracted"] = bool(
         cutoff and trace.created_at <= cutoff and _is_ordinary_chat_trace(trace)
     )
+    payload["starts_new_topic"] = topic_boundary is not None
+    if topic_boundary is not None:
+        payload["topic_boundary"] = topic_boundary.public_dict()
     return payload
 
 

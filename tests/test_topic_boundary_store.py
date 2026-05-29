@@ -77,6 +77,9 @@ class TopicBoundaryStoreTest(unittest.TestCase):
         self.assertEqual(run.boundaries[0].public_dict()["start_trace_id"], self.trace_id)
         self.assertEqual(run.boundaries[0].topic_title, "Memory graph")
 
+        boundaries = self.store.get_valid_boundaries_by_trace_ids([self.trace_id])
+        self.assertEqual(boundaries[self.trace_id].topic_title, "Memory graph")
+
     def test_rejects_boundary_start_trace_id_outside_source_traces(self) -> None:
         run = self.store.record_detection_tool_calls(
             detection_trace_id=self.detection_trace_id,

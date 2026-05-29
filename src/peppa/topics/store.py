@@ -242,6 +242,33 @@ class TopicBoundaryStore:
             raise ValueError("Failed to update topic boundary auto detection state.")
         return _auto_detection_state_from_row(row)
 
+    def get_valid_boundaries_by_trace_ids(
+        self,
+        trace_ids: list[str],
+    ) -> dict[str, TopicBoundaryRecord]:
+        clean_trace_ids = [_clean_text(trace_id) for trace_id in trace_ids if _clean_text(trace_id)]
+        if not clean_trace_ids:
+            return {}
+        with self._connect() as connection:
+            ensure_topic_boundary_schema(connection)
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM topic_boundaries
+                WHERE status = 'valid'
+                    AND trace_id IN ({placeholders})
+                ORDER BY created_at DESC
+                """.format(placeholders=_placeholders(clean_trace_ids)),
+                clean_trace_ids,
+            ).fetchall()
+
+        boundaries: dict[str, TopicBoundaryRecord] = {}
+        for row in rows:
+            boundary = _boundary_from_row(row)
+            if boundary.trace_id not in boundaries:
+                boundaries[boundary.trace_id] = boundary
+        return boundaries
+
     def record_detection_tool_calls(
         self,
         *,
@@ -503,6 +530,22 @@ def _auto_detection_state_id(conversation_id: str) -> str:
     return f"{TOPIC_BOUNDARY_DETECTION_STATE_ID_PREFIX}_{conversation_id}"
 
 
+def _boundary_from_row(row: sqlite3.Row) -> TopicBoundaryRecord:
+    return TopicBoundaryRecord(
+        id=row["id"],
+        trace_id=row["trace_id"],
+        conversation_id=row["conversation_id"],
+        run_id=row["run_id"],
+        topic_title=row["topic_title"],
+        reason=row["reason"],
+        confidence=_confidence(row["confidence"]),
+        tags=_json_text_list(row["tags_json"]),
+        status=row["status"],
+        error=row["error"],
+        created_at=row["created_at"],
+    )
+
+
 def _as_record(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
@@ -549,6 +592,20 @@ def _text_list(value: Any) -> list[str]:
         if text:
             result.append(text)
     return result
+
+
+def _json_text_list(value: Any) -> list[str]:
+    if not isinstance(value, str):
+        return []
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    return _text_list(parsed)
+
+
+def _placeholders(values: list[Any]) -> str:
+    return ", ".join("?" for _ in values)
 
 
 def _now() -> str:
