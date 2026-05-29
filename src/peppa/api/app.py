@@ -9,7 +9,7 @@ import json
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -227,6 +227,86 @@ def create_app() -> FastAPI:
         return ChatResponse(
             conversation_id=result.conversation_id,
             trace=_trace_payload_with_auto_memory_marker(result.trace, state),
+        )
+
+    @app.post("/api/chat/stream", response_model=None)
+    async def chat_stream(request: ChatRequest) -> StreamingResponse:
+        nonlocal auto_chat_followup_task
+        if not request.message.strip():
+            raise HTTPException(status_code=400, detail="Message cannot be empty.")
+        try:
+            settings = load_settings()
+            model_settings = settings.get_model(request.model)
+        except ConfigError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        agent = Agent(
+            settings=settings,
+            storage=storage,
+            identity_store=identity_store,
+            memory_recall_store=memory_recall_store,
+        )
+
+        async def stream_events():
+            nonlocal auto_chat_followup_task
+            try:
+                async for stream_event in agent.stream_chat(
+                    user_message=request.message,
+                    requested_model=request.model,
+                    conversation_id=request.conversation_id,
+                    temperature=request.temperature,
+                    prompt_history_messages=request.prompt_history_messages,
+                    channel=WEB_IDENTITY_CHANNEL,
+                    channel_instance=WEB_IDENTITY_INSTANCE,
+                ):
+                    if stream_event.event == "done" and stream_event.result is not None:
+                        result = stream_event.result
+                        if result.trace.error is None and (
+                            auto_chat_followup_task is None
+                            or auto_chat_followup_task.done()
+                        ):
+                            auto_chat_followup_task = asyncio.create_task(
+                                _run_auto_chat_followups(
+                                    storage=storage,
+                                    topic_boundary_store=topic_boundary_store,
+                                    memory_graph_store=memory_graph_store,
+                                    identity_store=identity_store,
+                                    memory_auto_extraction_store=memory_auto_extraction_store,
+                                    conversation_id=result.conversation_id,
+                                    current_trace_id=result.trace.id,
+                                    model_settings=model_settings,
+                                    temperature=request.temperature,
+                                )
+                            )
+                            auto_chat_followup_task.add_done_callback(
+                                _consume_background_task_result
+                            )
+                        state = memory_auto_extraction_store.get_state()
+                        yield _sse_event(
+                            "done",
+                            {
+                                "conversation_id": result.conversation_id,
+                                "trace": _trace_payload_with_auto_memory_marker(
+                                    result.trace,
+                                    state,
+                                ),
+                            },
+                        )
+                        continue
+
+                    yield _sse_event(stream_event.event, stream_event.data)
+            except ValueError as exc:
+                yield _sse_event("error", {"message": str(exc)})
+            except Exception as exc:
+                yield _sse_event("error", {"message": str(exc)})
+
+        return StreamingResponse(
+            stream_events(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
         )
 
     @app.post("/api/memory/recall", response_model=MemoryRecallResponse)
@@ -921,6 +1001,10 @@ def _consume_background_task_result(task: asyncio.Task[None]) -> None:
         task.result()
     except Exception:
         return
+
+
+def _sse_event(event: str, data: dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 def _apply_identity_tool_calls(

@@ -20,7 +20,7 @@ import {
   fetchIdentityContext,
   fetchTraces,
   recallMemory,
-  sendChat
+  streamChat
 } from './api';
 import { MemoryGraphPage } from './MemoryGraphPage';
 import type { IdentityContextResponse, PublicConfig, TraceRecord } from './types';
@@ -55,6 +55,10 @@ function App() {
   const [message, setMessage] = useState('');
   const [conversationId, setConversationId] = useState<string | undefined>();
   const [activeTrace, setActiveTrace] = useState<TraceRecord | null>(null);
+  const [streamingPreview, setStreamingPreview] = useState<{
+    userMessage: string;
+    assistantMessage: string;
+  } | null>(null);
   const [traces, setTraces] = useState<TraceRecord[]>([]);
   const [selectedTraceIds, setSelectedTraceIds] = useState<Set<string>>(() => new Set());
   const [activeTraceTab, setActiveTraceTab] = useState<TraceTab>('history');
@@ -140,16 +144,53 @@ function App() {
         return;
       }
 
-      const result = await sendChat({
-        message,
-        model: selectedModel,
-        temperature: selectedTemperature,
-        promptHistoryMessages,
-        conversationId
+      const outgoingMessage = message;
+      setStreamingPreview({
+        userMessage: outgoingMessage,
+        assistantMessage: ''
       });
+      setMessage('');
+      const result = await streamChat(
+        {
+          message: outgoingMessage,
+          model: selectedModel,
+          temperature: selectedTemperature,
+          promptHistoryMessages,
+          conversationId
+        },
+        {
+          onMeta: (payload) => {
+            if (payload.conversation_id) {
+              setConversationId(payload.conversation_id);
+            }
+          },
+          onDelta: (payload) => {
+            if (!payload.content) {
+              return;
+            }
+            setStreamingPreview((current) =>
+              current
+                ? {
+                    ...current,
+                    assistantMessage: current.assistantMessage + payload.content
+                  }
+                : current
+            );
+          },
+          onError: (payload) => {
+            if (payload.conversation_id) {
+              setConversationId(payload.conversation_id);
+            }
+            if (payload.trace) {
+              setActiveTrace(payload.trace);
+              setStreamingPreview(null);
+            }
+          }
+        }
+      );
       setConversationId(result.conversation_id);
       setActiveTrace(result.trace);
-      setMessage('');
+      setStreamingPreview(null);
       const nextTraces = await fetchTraces();
       applyTraces(nextTraces.traces);
     } catch (sendError) {
@@ -422,12 +463,21 @@ function App() {
               <div className="conversation-window">
                 <MessageBubble
                   role="user"
-                  content={activeTrace?.user_message ?? 'Send a message to create a trace.'}
+                  content={
+                    streamingPreview?.userMessage ??
+                    activeTrace?.user_message ??
+                    'Send a message to create a trace.'
+                  }
                 />
                 <MessageBubble
                   role="assistant"
-                  content={activeTrace?.assistant_message ?? activeTrace?.error ?? 'Model output will appear here.'}
-                  muted={!activeTrace?.assistant_message}
+                  content={
+                    streamingPreview?.assistantMessage ??
+                    activeTrace?.assistant_message ??
+                    activeTrace?.error ??
+                    'Model output will appear here.'
+                  }
+                  muted={!streamingPreview?.assistantMessage && !activeTrace?.assistant_message}
                 />
               </div>
 
