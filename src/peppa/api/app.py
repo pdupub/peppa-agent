@@ -37,7 +37,15 @@ from peppa.memory import (
 from peppa.models import ModelClient
 from peppa.paths import DATABASE_PATH, ROOT_DIR, WEB_DIST_DIR, ensure_runtime_dirs
 from peppa.prompts import load_skill
-from peppa.topics import TOPIC_BOUNDARY_TOOL_NAME
+from peppa.topics import (
+    MAX_TOPIC_BOUNDARY_DETECTION_TRACES,
+    TOPIC_BOUNDARY_DETECTION_TURN_THRESHOLD,
+    TOPIC_BOUNDARY_TOOL_NAME,
+    TopicBoundaryRunRecord,
+    TopicBoundaryStore,
+    topic_boundary_tool_choice,
+    topic_boundary_tools,
+)
 
 
 class ChatRequest(BaseModel):
@@ -113,6 +121,19 @@ class MemoryExtractionRunResult:
     success: bool
 
 
+@dataclass(frozen=True)
+class TopicBoundaryDetectionRunResult:
+    trace: TraceRecord | None
+    source_traces: list[TraceRecord]
+    run: TopicBoundaryRunRecord | None
+    success: bool
+
+    @property
+    def has_boundary(self) -> bool:
+        return bool(self.run and self.run.boundaries)
+
+
+LEGACY_TOPIC_BOUNDARY_TOOL_NAMES = {"mark_topic_boundary", TOPIC_BOUNDARY_TOOL_NAME}
 WEB_IDENTITY_CHANNEL = "web"
 WEB_IDENTITY_INSTANCE = "default"
 
@@ -127,7 +148,9 @@ def create_app() -> FastAPI:
     memory_auto_extraction_store.initialize()
     identity_store = ConversationIdentityStore()
     identity_store.initialize()
-    auto_memory_extraction_task: asyncio.Task[None] | None = None
+    topic_boundary_store = TopicBoundaryStore()
+    topic_boundary_store.initialize()
+    auto_chat_followup_task: asyncio.Task[None] | None = None
 
     app = FastAPI(title="Peppa", version=__version__)
     app.add_middleware(
@@ -158,7 +181,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/chat", response_model=ChatResponse)
     async def chat(request: ChatRequest) -> ChatResponse:
-        nonlocal auto_memory_extraction_task
+        nonlocal auto_chat_followup_task
         try:
             settings = load_settings()
             model_settings = settings.get_model(request.model)
@@ -183,20 +206,22 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         if result.trace.error is None and (
-            auto_memory_extraction_task is None or auto_memory_extraction_task.done()
+            auto_chat_followup_task is None or auto_chat_followup_task.done()
         ):
-            auto_memory_extraction_task = asyncio.create_task(
-                _run_auto_memory_extraction(
+            auto_chat_followup_task = asyncio.create_task(
+                _run_auto_chat_followups(
                     storage=storage,
+                    topic_boundary_store=topic_boundary_store,
                     memory_graph_store=memory_graph_store,
                     identity_store=identity_store,
                     memory_auto_extraction_store=memory_auto_extraction_store,
+                    conversation_id=result.conversation_id,
                     current_trace_id=result.trace.id,
                     model_settings=model_settings,
                     temperature=request.temperature,
                 )
             )
-            auto_memory_extraction_task.add_done_callback(_consume_background_task_result)
+            auto_chat_followup_task.add_done_callback(_consume_background_task_result)
 
         state = memory_auto_extraction_store.get_state()
         return ChatResponse(
@@ -458,6 +483,203 @@ def create_app() -> FastAPI:
     return app
 
 
+async def _run_auto_chat_followups(
+    *,
+    storage: Storage,
+    topic_boundary_store: TopicBoundaryStore,
+    memory_graph_store: MemoryGraphStore,
+    identity_store: ConversationIdentityStore,
+    memory_auto_extraction_store: MemoryAutoExtractionStore,
+    conversation_id: str,
+    current_trace_id: str,
+    model_settings: ModelSettings,
+    temperature: float,
+) -> None:
+    try:
+        topic_result = await _run_auto_topic_boundary_detection(
+            storage=storage,
+            topic_boundary_store=topic_boundary_store,
+            conversation_id=conversation_id,
+            model_settings=model_settings,
+            temperature=temperature,
+        )
+    except Exception:
+        topic_result = TopicBoundaryDetectionRunResult(
+            trace=None,
+            source_traces=[],
+            run=None,
+            success=False,
+        )
+    await _run_auto_memory_extraction(
+        storage=storage,
+        memory_graph_store=memory_graph_store,
+        identity_store=identity_store,
+        memory_auto_extraction_store=memory_auto_extraction_store,
+        current_trace_id=current_trace_id,
+        model_settings=model_settings,
+        temperature=temperature,
+        forced_trigger="topic_boundary" if topic_result.has_boundary else None,
+    )
+
+
+async def _run_auto_topic_boundary_detection(
+    *,
+    storage: Storage,
+    topic_boundary_store: TopicBoundaryStore,
+    conversation_id: str,
+    model_settings: ModelSettings,
+    temperature: float,
+) -> TopicBoundaryDetectionRunResult:
+    state = topic_boundary_store.get_auto_detection_state(conversation_id)
+    pending_traces = [
+        trace
+        for trace in storage.list_conversation_traces_after(
+            conversation_id=conversation_id,
+            created_at=state.last_source_trace_created_at if state else None,
+        )
+        if _is_ordinary_chat_trace(trace)
+    ]
+    if len(pending_traces) < TOPIC_BOUNDARY_DETECTION_TURN_THRESHOLD:
+        return TopicBoundaryDetectionRunResult(
+            trace=None,
+            source_traces=[],
+            run=None,
+            success=False,
+        )
+
+    selected_traces = pending_traces[:MAX_TOPIC_BOUNDARY_DETECTION_TRACES]
+    previous_trace = storage.get_previous_conversation_trace(
+        conversation_id=conversation_id,
+        before_created_at=selected_traces[0].created_at,
+    )
+    if previous_trace is not None and not _is_ordinary_chat_trace(previous_trace):
+        previous_trace = None
+
+    result = await _run_topic_boundary_detection(
+        storage=storage,
+        topic_boundary_store=topic_boundary_store,
+        conversation_id=conversation_id,
+        source_traces=selected_traces,
+        previous_trace=previous_trace,
+        model_settings=model_settings,
+        temperature=temperature,
+        mode="auto",
+    )
+    if result.success and result.trace is not None:
+        topic_boundary_store.mark_auto_detection_complete(
+            conversation_id=conversation_id,
+            last_source_trace_id=result.source_traces[-1].id,
+            last_source_trace_created_at=result.source_traces[-1].created_at,
+            detection_trace_id=result.trace.id,
+        )
+    return result
+
+
+async def _run_topic_boundary_detection(
+    *,
+    storage: Storage,
+    topic_boundary_store: TopicBoundaryStore,
+    conversation_id: str,
+    source_traces: list[TraceRecord],
+    previous_trace: TraceRecord | None,
+    model_settings: ModelSettings,
+    temperature: float,
+    mode: str,
+) -> TopicBoundaryDetectionRunResult:
+    selected_traces = sorted(source_traces, key=lambda item: item.created_at)
+    prompt_messages = _build_topic_boundary_detection_messages(
+        source_traces=[trace.public_dict() for trace in selected_traces],
+        previous_trace=previous_trace.public_dict() if previous_trace else None,
+    )
+    tools = topic_boundary_tools()
+    tool_choice = topic_boundary_tool_choice()
+    model_client = ModelClient()
+    request_payload = model_client.build_request_payload(
+        model_settings=model_settings,
+        messages=prompt_messages,
+        tools=tools,
+        tool_choice=tool_choice,
+        temperature=temperature,
+    )
+    source_trace_ids = [trace.id for trace in selected_traces]
+    request_payload["_peppa"] = {
+        "kind": "topic_boundary_detection",
+        "mode": mode,
+        "source_conversation_id": conversation_id,
+        "source_trace_ids": source_trace_ids,
+        "source_trace_order": source_trace_ids,
+        "previous_trace_id": previous_trace.id if previous_trace else None,
+        "max_source_traces": MAX_TOPIC_BOUNDARY_DETECTION_TRACES,
+    }
+
+    response_payload: dict[str, Any] | None = None
+    response_tool_calls = []
+    assistant_message: str | None = None
+    error: str | None = None
+    started_at = perf_counter()
+    try:
+        response = await model_client.chat(
+            model_settings=model_settings,
+            messages=prompt_messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            temperature=temperature,
+        )
+        request_payload = response.request_payload
+        request_payload["_peppa"] = {
+            "kind": "topic_boundary_detection",
+            "mode": mode,
+            "source_conversation_id": conversation_id,
+            "source_trace_ids": source_trace_ids,
+            "source_trace_order": source_trace_ids,
+            "previous_trace_id": previous_trace.id if previous_trace else None,
+            "max_source_traces": MAX_TOPIC_BOUNDARY_DETECTION_TRACES,
+        }
+        response_payload = response.response_payload
+        response_tool_calls = response.tool_calls
+        assistant_message = response.content
+    except Exception as exc:
+        error = str(exc)
+
+    detection_conversation_id = storage.create_conversation("Topic boundary detection")
+    duration_ms = int((perf_counter() - started_at) * 1000)
+    trace = storage.create_trace(
+        conversation_id=detection_conversation_id,
+        model=model_settings.model,
+        user_message=f"Topic boundary detection from {len(selected_traces)} trace(s)",
+        assistant_message=assistant_message,
+        prompt_messages=prompt_messages,
+        request_payload=request_payload,
+        response_payload=response_payload,
+        duration_ms=duration_ms,
+        error=error,
+    )
+
+    run: TopicBoundaryRunRecord | None = None
+    success = error is None and response_payload is not None
+    if success:
+        run = topic_boundary_store.record_detection_tool_calls(
+            detection_trace_id=trace.id,
+            conversation_id=conversation_id,
+            model=model_settings.model,
+            source_trace_ids=source_trace_ids,
+            previous_trace_id=previous_trace.id if previous_trace else None,
+            tool_calls=response_tool_calls,
+        )
+        success = run.success
+        if run.error:
+            updated_trace = storage.update_trace_error(trace.id, run.error)
+            if updated_trace is not None:
+                trace = updated_trace
+
+    return TopicBoundaryDetectionRunResult(
+        trace=trace,
+        source_traces=selected_traces,
+        run=run,
+        success=success,
+    )
+
+
 async def _run_auto_memory_extraction(
     *,
     storage: Storage,
@@ -467,6 +689,7 @@ async def _run_auto_memory_extraction(
     current_trace_id: str,
     model_settings: ModelSettings,
     temperature: float,
+    forced_trigger: str | None = None,
 ) -> None:
     try:
         state = memory_auto_extraction_store.get_state()
@@ -487,7 +710,7 @@ async def _run_auto_memory_extraction(
         if current_trace is None:
             return
 
-        trigger = _auto_memory_extraction_trigger(
+        trigger = forced_trigger or _auto_memory_extraction_trigger(
             pending_traces=pending_traces,
             current_trace=current_trace,
         )
@@ -678,7 +901,7 @@ def _has_topic_boundary_tool_call(trace: dict[str, Any]) -> bool:
         if not isinstance(tool_calls, list):
             continue
         for tool_call in tool_calls:
-            if _tool_call_name(tool_call) == TOPIC_BOUNDARY_TOOL_NAME:
+            if _tool_call_name(tool_call) in LEGACY_TOPIC_BOUNDARY_TOOL_NAMES:
                 return True
     return False
 
@@ -721,6 +944,42 @@ def _apply_identity_tool_calls(
         except ValueError as exc:
             errors.append(str(exc))
     return errors
+
+
+def _build_topic_boundary_detection_messages(
+    *,
+    source_traces: list[dict[str, Any]],
+    previous_trace: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    payload = {
+        "previous_context": _topic_detection_trace_payload(previous_trace)
+        if previous_trace
+        else None,
+        "candidate_traces": [
+            _topic_detection_trace_payload(trace) for trace in source_traces
+        ],
+    }
+    return [
+        {
+            "role": "system",
+            "content": load_skill("topic-boundary-detection/SKILL.md"),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(payload, ensure_ascii=False, indent=2),
+        },
+    ]
+
+
+def _topic_detection_trace_payload(trace: dict[str, Any] | None) -> dict[str, Any] | None:
+    if trace is None:
+        return None
+    return {
+        "trace_id": trace.get("id"),
+        "created_at": trace.get("created_at"),
+        "user": trace.get("user_message"),
+        "assistant": trace.get("assistant_message") or trace.get("error") or "",
+    }
 
 
 def _build_identity_extraction_messages(
@@ -811,6 +1070,7 @@ def _is_tool_call_trace(trace: dict[str, Any]) -> bool:
     if isinstance(request_meta, dict) and request_meta.get("kind") in {
         "identity_update",
         "memory_extraction",
+        "topic_boundary_detection",
     }:
         return True
 
@@ -827,7 +1087,7 @@ def _is_tool_call_trace(trace: dict[str, Any]) -> bool:
         if not isinstance(tool_calls, list):
             continue
         for tool_call in tool_calls:
-            if _tool_call_name(tool_call) != TOPIC_BOUNDARY_TOOL_NAME:
+            if _tool_call_name(tool_call) not in LEGACY_TOPIC_BOUNDARY_TOOL_NAMES:
                 return True
     return False
 

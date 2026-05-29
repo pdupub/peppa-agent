@@ -151,7 +151,14 @@ MEMORY_GRAPH_UPDATE_TOOL: dict[str, Any] = {
                                         "description": "本次 tool call 内的临时引用，例如 node_1。",
                                     },
                                     "type": {"type": "string", "enum": NODE_TYPES},
-                                    "title": {"type": "string"},
+                                    "title": {
+                                        "type": "string",
+                                        "description": (
+                                            "node 的短标题。必须是短名词或短名词短语；"
+                                            "英文最多 3 个单词，中文不超过 8 个汉字。"
+                                            "不要写完整句子，细节放入 summary、source_quote、tags 或 edge。"
+                                        ),
+                                    },
                                     "summary": {"type": "string"},
                                     "tags": {"type": "array", "items": {"type": "string"}},
                                     "source_trace_id": {

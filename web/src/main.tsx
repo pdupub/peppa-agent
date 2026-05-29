@@ -30,10 +30,10 @@ const DEFAULT_TEMPERATURE = 1;
 const MIN_TEMPERATURE = 0;
 const MAX_TEMPERATURE = 2;
 const TEMPERATURE_STORAGE_KEY = 'peppa.temperatureByModel.v1';
-const TOPIC_BOUNDARY_TOOL_NAME = 'mark_topic_boundary';
+const TOPIC_BOUNDARY_TOOL_NAMES = new Set(['mark_topic_boundary', 'record_topic_boundaries']);
 const DEFAULT_PROMPT_HISTORY_MESSAGES = 12;
 const PROMPT_HISTORY_MESSAGE_OPTIONS = [0, 2, 4, 6, 8, 12, 16, 24, 32, 50];
-type TraceTab = 'history' | 'memory';
+type TraceTab = 'history' | 'memory' | 'topic';
 type AppRoute = 'console' | 'memory';
 
 function initialRoute(): AppRoute {
@@ -277,14 +277,23 @@ function App() {
     [config, selectedModel]
   );
   const historyTraces = useMemo(
-    () => traces.filter((trace) => !isMemoryExtractionTrace(trace)),
+    () => traces.filter((trace) => !isMemoryExtractionTrace(trace) && !isTopicBoundaryTrace(trace)),
     [traces]
   );
   const memoryExtractionTraces = useMemo(
     () => traces.filter((trace) => isMemoryExtractionTrace(trace)),
     [traces]
   );
-  const visibleTraces = activeTraceTab === 'history' ? historyTraces : memoryExtractionTraces;
+  const topicBoundaryTraces = useMemo(
+    () => traces.filter((trace) => isTopicBoundaryTrace(trace)),
+    [traces]
+  );
+  const visibleTraces =
+    activeTraceTab === 'history'
+      ? historyTraces
+      : activeTraceTab === 'memory'
+        ? memoryExtractionTraces
+        : topicBoundaryTraces;
   const selectableHistoryTraceIds = useMemo(
     () => historyTraces.filter((trace) => !isToolCallTrace(trace)).map((trace) => trace.id),
     [historyTraces]
@@ -518,6 +527,16 @@ function App() {
                     Memory Extraction
                     <span>{memoryExtractionTraces.length}</span>
                   </button>
+                  <button
+                    className={activeTraceTab === 'topic' ? 'trace-tab active' : 'trace-tab'}
+                    type="button"
+                    role="tab"
+                    aria-selected={activeTraceTab === 'topic'}
+                    onClick={() => setActiveTraceTab('topic')}
+                  >
+                    Topic Boundary
+                    <span>{topicBoundaryTraces.length}</span>
+                  </button>
                 </div>
 
                 {visibleTraces.map((trace) => {
@@ -727,13 +746,18 @@ function isMemoryExtractionTrace(trace: TraceRecord): boolean {
   return requestMeta?.kind === 'memory_extraction';
 }
 
+function isTopicBoundaryTrace(trace: TraceRecord): boolean {
+  const requestMeta = getRecord(trace.request_payload._peppa);
+  return requestMeta?.kind === 'topic_boundary_detection';
+}
+
 function isToolCallTrace(trace: TraceRecord): boolean {
   if (isMemoryExtractionTrace(trace)) {
     return true;
   }
 
   const requestMeta = getRecord(trace.request_payload._peppa);
-  if (requestMeta?.kind === 'identity_update') {
+  if (requestMeta?.kind === 'identity_update' || requestMeta?.kind === 'topic_boundary_detection') {
     return true;
   }
 
@@ -748,7 +772,7 @@ function isToolCallTrace(trace: TraceRecord): boolean {
     const toolCalls = message?.tool_calls;
     return (
       Array.isArray(toolCalls) &&
-      toolCalls.some((toolCall) => getToolCallName(toolCall) !== TOPIC_BOUNDARY_TOOL_NAME)
+      toolCalls.some((toolCall) => !TOPIC_BOUNDARY_TOOL_NAMES.has(getToolCallName(toolCall) ?? ''))
     );
   });
 }

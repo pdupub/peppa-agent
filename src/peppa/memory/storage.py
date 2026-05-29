@@ -270,6 +270,58 @@ class Storage:
                 ).fetchall()
         return [_trace_from_row(row) for row in rows]
 
+    def list_conversation_traces_after(
+        self,
+        *,
+        conversation_id: str,
+        created_at: str | None,
+    ) -> list[TraceRecord]:
+        with self._connect() as connection:
+            if created_at:
+                rows = connection.execute(
+                    """
+                    SELECT *
+                    FROM traces
+                    WHERE conversation_id = ?
+                        AND created_at > ?
+                    ORDER BY created_at ASC
+                    """,
+                    (conversation_id, created_at),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT *
+                    FROM traces
+                    WHERE conversation_id = ?
+                    ORDER BY created_at ASC
+                    """,
+                    (conversation_id,),
+                ).fetchall()
+        return [_trace_from_row(row) for row in rows]
+
+    def get_previous_conversation_trace(
+        self,
+        *,
+        conversation_id: str,
+        before_created_at: str,
+    ) -> TraceRecord | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM traces
+                WHERE conversation_id = ?
+                    AND created_at < ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (conversation_id, before_created_at),
+            ).fetchone()
+        if row is None:
+            return None
+        return _trace_from_row(row)
+
     def get_trace(self, trace_id: str) -> TraceRecord | None:
         with self._connect() as connection:
             row = connection.execute(

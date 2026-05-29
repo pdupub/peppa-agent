@@ -88,7 +88,14 @@ tag 可以包括：
 
 ## Node 规则
 
-node 表示对象、实体、概念或活动。node 通常应该是名词或名词短语，可以稍长，但不应该是完整句子。
+node 表示对象、实体、概念或活动。node 的 `title` 必须是短名词或短名词短语，不应该是完整句子，也不应该承载细节描述。
+
+`title` 长度限制：
+
+- 英文 `title` 最多 3 个单词。
+- 中文 `title` 不超过 8 个汉字。
+- 中英混合时也要保持短标签形式，优先压缩为中文 8 字以内或英文 3 词以内。
+- 过长的背景、限定、判断、原因和细节应放入 `summary`、`source_quote`、tags 或 edge，而不是放进 `title`。
 
 好的 node：
 
@@ -99,6 +106,8 @@ Peppa
 记忆系统
 骑马
 红烧肉
+AI agent
+memory graph
 ```
 
 不好的 node：
@@ -107,6 +116,8 @@ Peppa
 我在草地上骑马
 我希望开发前先讨论方案
 Peppa 的数据库不能随便删除
+区块链开发与去中心化系统规则设计哲学
+blockchain consensus mechanism design philosophy
 ```
 
 如果用户说“我在草地上骑马”，更合适的是：
